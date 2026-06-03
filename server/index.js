@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
 import XLSX from 'xlsx';
+import { existsSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { db, nowIso } from './lib/db.js';
@@ -10,7 +11,9 @@ import { importExcel } from './lib/import-excel.js';
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
+const host = process.env.HOST || '0.0.0.0';
 const uploadDir = join(process.cwd(), 'uploads');
+const distDir = join(process.cwd(), 'dist');
 
 mkdirSync(uploadDir, { recursive: true });
 
@@ -493,6 +496,13 @@ app.get('/api/stats', (req, res) => {
   });
 });
 
-app.listen(port, () => {
-  console.log(`Server listening on http://127.0.0.1:${port}`);
+if (existsSync(distDir)) {
+  app.use(express.static(distDir));
+  app.get(/^(?!\/api).*/, (_req, res) => {
+    res.sendFile(join(distDir, 'index.html'));
+  });
+}
+
+app.listen(port, host, () => {
+  console.log(`Server listening on http://${host}:${port}`);
 });

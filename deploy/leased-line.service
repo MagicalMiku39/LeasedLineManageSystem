@@ -1,0 +1,16 @@
+[Unit]
+Description=Leased Line Ledger System
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/leased-line-ledger-system
+Environment=NODE_ENV=production
+Environment=HOST=0.0.0.0
+Environment=PORT=3001
+ExecStart=/usr/bin/node server/index.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

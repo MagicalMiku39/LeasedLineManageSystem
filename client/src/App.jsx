@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import './styles.css';
 
-const apiBase = 'http://127.0.0.1:3001/api';
+const apiBase = '/api';
 const visibleColumnsStorageKey = 'ledgerVisibleColumns:v2';
 
 const emptyFilters = {
