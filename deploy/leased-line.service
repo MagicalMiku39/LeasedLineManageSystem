@@ -7,7 +7,11 @@ Type=simple
 WorkingDirectory=/opt/leased-line-ledger-system
 Environment=NODE_ENV=production
 Environment=HOST=0.0.0.0
-Environment=PORT=3001
+Environment=PORT=3443
+Environment=HTTP_REDIRECT_PORT=3001
+Environment=HTTPS_KEY_FILE=/opt/leased-line-ledger-system/certs/server.key
+Environment=HTTPS_CERT_FILE=/opt/leased-line-ledger-system/certs/server.crt
+Environment=AUTH_COOKIE_SECURE=true
 ExecStart=/usr/bin/node server/index.js
 Restart=always
 RestartSec=5

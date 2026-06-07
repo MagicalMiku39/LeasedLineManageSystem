@@ -33,16 +33,41 @@ npm run db:init
 npm run build
 ```
 
-## 4. 临时启动
+## 4. 生成 HTTPS 自签名证书
+
+如果你没有正式域名证书，可以先生成自签名证书：
 
 ```bash
-HOST=0.0.0.0 PORT=3001 npm run start:prod
+mkdir -p certs
+
+DNS_NAME=服务器IP或域名
+
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout certs/server.key \
+  -out certs/server.crt \
+  -days 1095 \
+  -subj "/CN=${DNS_NAME}" \
+  -addext "subjectAltName=DNS:${DNS_NAME},IP:${DNS_NAME},DNS:localhost"
+```
+
+自签名证书首次访问时浏览器会提示“不安全”，需要手动信任或继续访问。生产环境如有域名，建议后续换成正式 CA 证书。
+
+## 5. 临时启动 HTTPS
+
+```bash
+HOST=0.0.0.0 \
+PORT=3443 \
+HTTP_REDIRECT_PORT=3001 \
+HTTPS_KEY_FILE=certs/server.key \
+HTTPS_CERT_FILE=certs/server.crt \
+AUTH_COOKIE_SECURE=true \
+npm run start:prod
 ```
 
 访问：
 
 ```text
-http://服务器IP:3001
+https://服务器IP:3443
 ```
 
 首次打开时，系统会要求初始化管理员账号：
@@ -54,18 +79,19 @@ http://服务器IP:3001
 
 登录成功后，7 天内可自动登录。会话保存在服务端，浏览器只保存 HttpOnly Cookie。
 
-## 5. 开放防火墙
+## 6. 开放防火墙
 
 如果 Ubuntu 开启了 ufw：
 
 ```bash
+sudo ufw allow 3443/tcp
 sudo ufw allow 3001/tcp
 sudo ufw status
 ```
 
-云服务器还需要在云平台安全组放行 TCP `3001`。
+云服务器还需要在云平台安全组放行 TCP `3443`。如果需要 HTTP 自动跳转 HTTPS，也放行 TCP `3001`。
 
-## 6. 配置 systemd 常驻运行
+## 7. 配置 systemd 常驻运行
 
 ```bash
 sudo cp deploy/leased-line.service /etc/systemd/system/leased-line.service
@@ -81,7 +107,14 @@ sudo systemctl status leased-line
 journalctl -u leased-line -f
 ```
 
-## 7. 更新版本
+systemd 模板默认：
+
+1. HTTPS 端口：`3443`
+2. HTTP 跳转端口：`3001`
+3. 证书路径：`/opt/leased-line-ledger-system/certs/server.crt`
+4. 私钥路径：`/opt/leased-line-ledger-system/certs/server.key`
+
+## 8. 更新版本
 
 ```bash
 cd /opt/leased-line-ledger-system
@@ -91,7 +124,7 @@ npm run build
 sudo systemctl restart leased-line
 ```
 
-## 8. 数据说明
+## 9. 数据说明
 
 运行后会自动创建：
 

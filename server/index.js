@@ -2,7 +2,9 @@ import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
 import XLSX from 'xlsx';
-import { existsSync } from 'node:fs';
+import http from 'node:http';
+import https from 'node:https';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { db, nowIso } from './lib/db.js';
@@ -20,8 +22,17 @@ import {
 const app = express();
 const port = Number(process.env.PORT || 3001);
 const host = process.env.HOST || '0.0.0.0';
+const httpsKeyFile = process.env.HTTPS_KEY_FILE || '';
+const httpsCertFile = process.env.HTTPS_CERT_FILE || '';
+const httpsPfxFile = process.env.HTTPS_PFX_FILE || '';
+const httpsPfxPassphrase = process.env.HTTPS_PFX_PASSPHRASE || '';
+const httpsEnabled = Boolean(httpsPfxFile || (httpsKeyFile && httpsCertFile));
 const uploadDir = join(process.cwd(), 'uploads');
 const distDir = join(process.cwd(), 'dist');
+
+if (httpsEnabled && process.env.AUTH_COOKIE_SECURE === undefined) {
+  process.env.AUTH_COOKIE_SECURE = 'true';
+}
 
 mkdirSync(uploadDir, { recursive: true });
 
@@ -578,6 +589,28 @@ if (existsSync(distDir)) {
   });
 }
 
-app.listen(port, host, () => {
-  console.log(`Server listening on http://${host}:${port}`);
-});
+if (httpsEnabled) {
+  const httpsOptions = httpsPfxFile
+    ? { pfx: readFileSync(httpsPfxFile), passphrase: httpsPfxPassphrase }
+    : { key: readFileSync(httpsKeyFile), cert: readFileSync(httpsCertFile) };
+  const server = https.createServer(httpsOptions, app);
+
+  server.listen(port, host, () => {
+    console.log(`HTTPS server listening on https://${host}:${port}`);
+  });
+
+  if (process.env.HTTP_REDIRECT_PORT) {
+    const redirectPort = Number(process.env.HTTP_REDIRECT_PORT);
+    http.createServer((req, res) => {
+      const hostname = String(req.headers.host || '').split(':')[0] || 'localhost';
+      res.writeHead(301, { Location: `https://${hostname}:${port}${req.url || '/'}` });
+      res.end();
+    }).listen(redirectPort, host, () => {
+      console.log(`HTTP redirect listening on http://${host}:${redirectPort}`);
+    });
+  }
+} else {
+  app.listen(port, host, () => {
+    console.log(`HTTP server listening on http://${host}:${port}`);
+  });
+}
