@@ -8,6 +8,14 @@ import { join } from 'node:path';
 import { db, nowIso } from './lib/db.js';
 import { editableFields } from './lib/field-map.js';
 import { importExcel } from './lib/import-excel.js';
+import {
+  authStatus,
+  currentUser,
+  loginAuth,
+  logoutAuth,
+  requireAuth,
+  setupAuth
+} from './lib/auth.js';
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -21,6 +29,35 @@ const upload = multer({ dest: uploadDir });
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
+
+app.get('/api/auth/status', (req, res) => {
+  res.json({ ...authStatus(), user: currentUser(req) });
+});
+
+app.post('/api/auth/setup', (req, res) => {
+  try {
+    res.json(setupAuth(req.body || {}));
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/auth/login', (req, res) => {
+  try {
+    const result = loginAuth(req.body || {});
+    res.setHeader('Set-Cookie', result.cookie);
+    res.json({ user: result.user });
+  } catch (error) {
+    res.status(401).json({ error: error.message });
+  }
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  logoutAuth(req, res);
+  res.json({ ok: true });
+});
+
+app.use('/api', requireAuth);
 
 function numberOrNull(value) {
   if (value === undefined || value === null || value === '') return null;

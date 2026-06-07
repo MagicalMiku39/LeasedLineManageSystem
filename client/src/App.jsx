@@ -7,10 +7,13 @@ import {
   Download,
   FileSpreadsheet,
   History,
+  KeyRound,
   ListChecks,
+  LogOut,
   RefreshCw,
   Save,
   Search,
+  ShieldCheck,
   SlidersHorizontal,
   Upload,
   X
@@ -155,6 +158,89 @@ function SelectFilter({ value, onChange, options, label }) {
         <option key={option} value={option}>{option}</option>
       ))}
     </select>
+  );
+}
+
+function SetupView({ onReady }) {
+  const [form, setForm] = useState({ username: 'admin', password: '' });
+  const [setupInfo, setSetupInfo] = useState(null);
+  const [error, setError] = useState('');
+
+  async function submit(event) {
+    event.preventDefault();
+    setError('');
+    const response = await fetch(`${apiBase}/auth/setup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(form)
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      setError(data.error || '初始化失败');
+      return;
+    }
+    setSetupInfo(data);
+  }
+
+  return (
+    <div className="auth-page">
+      <form className="auth-panel" onSubmit={submit}>
+        <div className="auth-mark"><ShieldCheck size={28} /></div>
+        <h1>初始化管理员</h1>
+        <p>首次使用需要创建账号，并将密钥添加到 Google Authenticator。</p>
+        <label>账号<input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></label>
+        <label>密码<input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="至少 8 位" /></label>
+        {error && <div className="auth-error">{error}</div>}
+        {!setupInfo && <button className="primary auth-submit" type="submit">生成验证器密钥</button>}
+        {setupInfo && (
+          <div className="setup-secret">
+            <span>Google Authenticator 设置密钥</span>
+            <strong>{setupInfo.totpSecret}</strong>
+            <small>在 Google Authenticator 中选择手动输入密钥，账号名填写 {setupInfo.username}。</small>
+            <button className="primary auth-submit" type="button" onClick={onReady}>已添加，去登录</button>
+          </div>
+        )}
+      </form>
+    </div>
+  );
+}
+
+function LoginView({ onLogin }) {
+  const [form, setForm] = useState({ username: 'admin', password: '', code: '' });
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function submit(event) {
+    event.preventDefault();
+    setLoading(true);
+    setError('');
+    const response = await fetch(`${apiBase}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(form)
+    });
+    const data = await response.json();
+    setLoading(false);
+    if (!response.ok) {
+      setError(data.error || '登录失败');
+      return;
+    }
+    onLogin(data.user);
+  }
+
+  return (
+    <div className="auth-page">
+      <form className="auth-panel" onSubmit={submit}>
+        <div className="auth-mark"><KeyRound size={28} /></div>
+        <h1>登录系统</h1>
+        <p>登录成功后 7 天内可自动登录。验证码来自 Google Authenticator。</p>
+        <label>账号<input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></label>
+        <label>密码<input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></label>
+        <label>验证码<input value={form.code} inputMode="numeric" maxLength="6" onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="6 位动态验证码" /></label>
+        {error && <div className="auth-error">{error}</div>}
+        <button className="primary auth-submit" type="submit" disabled={loading}>{loading ? '登录中' : '登录'}</button>
+      </form>
+    </div>
   );
 }
 
@@ -458,6 +544,7 @@ function BatchModal({ ids, onClose, onSaved }) {
 }
 
 function App() {
+  const [auth, setAuth] = useState({ loading: true, configured: true, user: null });
   const [activeView, setActiveView] = useState('ledger');
   const [filters, setFilters] = useState(emptyFilters);
   const [options, setOptions] = useState({ regions: [], products: [], statuses: [], managers: [], ledgerStatuses: [] });
@@ -531,16 +618,19 @@ function App() {
   }, [visibleColumns]);
 
   useEffect(() => {
+    if (!auth.user) return;
     loadLedger();
-  }, [queryString]);
+  }, [queryString, auth.user]);
 
   useEffect(() => {
+    if (!auth.user) return;
     loadStats();
-  }, [month]);
+  }, [month, auth.user]);
 
   useEffect(() => {
+    if (!auth.user) return;
     loadOptions();
-  }, []);
+  }, [auth.user]);
 
   async function uploadExcel(event) {
     const file = event.target.files?.[0];
@@ -591,6 +681,33 @@ function App() {
 
   const totalPages = Math.max(1, Math.ceil(total / 20));
 
+  async function loadAuthStatus() {
+    const response = await fetch(`${apiBase}/auth/status`);
+    const data = await response.json();
+    setAuth({ loading: false, configured: data.configured, user: data.user || null });
+  }
+
+  async function logout() {
+    await fetch(`${apiBase}/auth/logout`, { method: 'POST' });
+    setAuth({ loading: false, configured: true, user: null });
+  }
+
+  useEffect(() => {
+    loadAuthStatus();
+  }, []);
+
+  if (auth.loading) {
+    return <div className="auth-page"><div className="auth-panel"><h1>正在加载</h1></div></div>;
+  }
+
+  if (!auth.configured) {
+    return <SetupView onReady={loadAuthStatus} />;
+  }
+
+  if (!auth.user) {
+    return <LoginView onLogin={(user) => setAuth({ loading: false, configured: true, user })} />;
+  }
+
   return (
     <div className="app">
       <header>
@@ -617,6 +734,9 @@ function App() {
           </button>
           <button onClick={() => { loadLedger(); loadStats(); loadOptions(); }}>
             <RefreshCw size={16} /> 刷新
+          </button>
+          <button onClick={logout}>
+            <LogOut size={16} /> 退出
           </button>
         </div>
       </header>

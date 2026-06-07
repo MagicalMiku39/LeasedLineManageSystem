@@ -45,6 +45,15 @@ HOST=0.0.0.0 PORT=3001 npm run start:prod
 http://服务器IP:3001
 ```
 
+首次打开时，系统会要求初始化管理员账号：
+
+1. 设置账号和密码，密码至少 8 位。
+2. 系统生成 Google Authenticator 设置密钥。
+3. 在 Google Authenticator 中选择手动输入密钥。
+4. 使用账号、密码和 6 位动态验证码登录。
+
+登录成功后，7 天内可自动登录。会话保存在服务端，浏览器只保存 HttpOnly Cookie。
+
 ## 5. 开放防火墙
 
 如果 Ubuntu 开启了 ufw：
@@ -93,3 +102,4 @@ uploads/
 
 这些是运行期数据，不会进入 Git。跨设备迁移时默认不复制数据库；需要数据时建议在新服务器重新导入 Excel。
 
+管理员账号、密码哈希、Google Authenticator 密钥和登录会话也保存在 `data/ledger.db` 中。因此不同服务器默认需要单独初始化管理员。
