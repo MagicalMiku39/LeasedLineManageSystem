@@ -206,6 +206,24 @@ main {
   padding: 14px;
 }
 
+.stat-card-button {
+  display: block;
+  width: 100%;
+  height: auto;
+  text-align: left;
+  color: inherit;
+}
+
+.stat-card-button:hover {
+  border-color: #93c5fd;
+  box-shadow: 0 8px 18px rgba(37, 99, 235, .12);
+}
+
+.stat-card-button.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
 .month-picker {
   display: flex;
   flex-direction: column;

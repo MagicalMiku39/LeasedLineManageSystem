@@ -145,6 +145,24 @@ const manualLedgerColumns = [
   'updated_at'
 ];
 
+const normalStatus = '正常在用';
+const stoppingStatus = '停机执行中';
+const stoppedStatus = '停机';
+const addedStatuses = [normalStatus, stoppingStatus, stoppedStatus];
+const cancelledStatuses = ['欠费销户', '正式销户', '销户(订单处理中)', '销户（订单处理中）'];
+
+function monthRange(month) {
+  const normalized = String(month || new Date().toISOString().slice(0, 7)).slice(0, 7);
+  const monthStart = `${normalized}-01`;
+  const nextMonth = new Date(`${monthStart}T00:00:00`);
+  nextMonth.setMonth(nextMonth.getMonth() + 1);
+  return {
+    month: normalized,
+    monthStart,
+    nextMonthStart: nextMonth.toISOString().slice(0, 10)
+  };
+}
+
 function buildLedgerWhere(query) {
   const where = [];
   const params = [];
@@ -202,6 +220,26 @@ function buildLedgerWhere(query) {
   if (query.contractEndTo) {
     where.push('contract_end_date <= ?');
     params.push(query.contractEndTo);
+  }
+
+  if (query.statFilter) {
+    const { monthStart, nextMonthStart } = monthRange(query.statMonth);
+    if (query.statFilter === 'active') {
+      where.push('COALESCE(product_status_name, ledger_status, \'\') = ?');
+      params.push(normalStatus);
+    } else if (query.statFilter === 'cancelled') {
+      where.push(`COALESCE(product_status_name, ledger_status, '') IN (${cancelledStatuses.map(() => '?').join(', ')})`);
+      params.push(...cancelledStatuses);
+    } else if (query.statFilter === 'addedInMonth') {
+      where.push(`start_time >= ? AND start_time < ? AND COALESCE(product_status_name, ledger_status, '') IN (${addedStatuses.map(() => '?').join(', ')})`);
+      params.push(monthStart, nextMonthStart, ...addedStatuses);
+    } else if (query.statFilter === 'cancelledInMonth') {
+      where.push(`status_time >= ? AND status_time < ? AND COALESCE(product_status_name, ledger_status, '') IN (${cancelledStatuses.map(() => '?').join(', ')})`);
+      params.push(monthStart, nextMonthStart, ...cancelledStatuses);
+    } else if (query.statFilter === 'stoppedInMonth') {
+      where.push('status_time >= ? AND status_time < ? AND COALESCE(product_status_name, ledger_status, \'\') = ?');
+      params.push(monthStart, nextMonthStart, stoppedStatus);
+    }
   }
 
   return {
@@ -482,16 +520,7 @@ app.get('/api/options', (_req, res) => {
 });
 
 app.get('/api/stats', (req, res) => {
-  const month = String(req.query.month || new Date().toISOString().slice(0, 7));
-  const monthStart = `${month}-01`;
-  const nextMonth = new Date(`${monthStart}T00:00:00`);
-  nextMonth.setMonth(nextMonth.getMonth() + 1);
-  const nextMonthStart = nextMonth.toISOString().slice(0, 10);
-  const normalStatus = '正常在用';
-  const stoppingStatus = '停机执行中';
-  const stoppedStatus = '停机';
-  const addedStatuses = [normalStatus, stoppingStatus, stoppedStatus];
-  const cancelledStatuses = ['欠费销户', '正式销户', '销户(订单处理中)', '销户（订单处理中）'];
+  const { month, monthStart, nextMonthStart } = monthRange(req.query.month);
   const addedPlaceholders = addedStatuses.map(() => '?').join(', ');
   const cancelledPlaceholders = cancelledStatuses.map(() => '?').join(', ');
 

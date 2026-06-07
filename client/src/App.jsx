@@ -36,7 +36,9 @@ const emptyFilters = {
   bandwidth: '',
   zeroBilling: '',
   contractEndFrom: '',
-  contractEndTo: ''
+  contractEndTo: '',
+  statFilter: '',
+  statMonth: ''
 };
 
 const tableColumns = [
@@ -141,7 +143,16 @@ function money(value) {
   return number.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function StatCard({ label, value, suffix }) {
+function StatCard({ label, value, suffix, onClick, active }) {
+  if (onClick) {
+    return (
+      <button className={`stat-card stat-card-button${active ? ' active' : ''}`} type="button" onClick={onClick}>
+        <span>{label}</span>
+        <strong>{value}{suffix || ''}</strong>
+      </button>
+    );
+  }
+
   return (
     <div className="stat-card">
       <span>{label}</span>
@@ -585,12 +596,23 @@ function App() {
     filters.bandwidth,
     filters.zeroBilling,
     filters.contractEndFrom,
-    filters.contractEndTo
+    filters.contractEndTo,
+    filters.statFilter
   ].filter(Boolean).length;
 
   function updateFilter(key, value) {
     setPage(1);
     setFilters((current) => ({ ...current, [key]: value }));
+  }
+
+  function applyStatFilter(statFilter) {
+    setActiveView('ledger');
+    setPage(1);
+    if (!statFilter) {
+      setFilters(emptyFilters);
+      return;
+    }
+    setFilters({ ...emptyFilters, statFilter, statMonth: month });
   }
 
   async function loadLedger() {
@@ -626,6 +648,11 @@ function App() {
     if (!auth.user) return;
     loadStats();
   }, [month, auth.user]);
+
+  useEffect(() => {
+    if (!filters.statFilter || !filters.statFilter.includes('InMonth')) return;
+    setFilters((current) => ({ ...current, statMonth: month }));
+  }, [month]);
 
   useEffect(() => {
     if (!auth.user) return;
@@ -750,12 +777,12 @@ function App() {
             </div>
             <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
           </div>
-          <StatCard label="专线总数" value={stats?.total || 0} />
-          <StatCard label="正常在用" value={stats?.active || 0} />
-          <StatCard label="已销户" value={stats?.cancelled || 0} />
-          <StatCard label="本月新增" value={stats?.addedInMonth || 0} />
-          <StatCard label="本月销户" value={stats?.cancelledInMonth || 0} />
-          <StatCard label="本月停机" value={stats?.stoppedInMonth || 0} />
+          <StatCard label="专线总数" value={stats?.total || 0} onClick={() => applyStatFilter('')} active={!filters.statFilter} />
+          <StatCard label="正常在用" value={stats?.active || 0} onClick={() => applyStatFilter('active')} active={filters.statFilter === 'active'} />
+          <StatCard label="已销户" value={stats?.cancelled || 0} onClick={() => applyStatFilter('cancelled')} active={filters.statFilter === 'cancelled'} />
+          <StatCard label="本月新增" value={stats?.addedInMonth || 0} onClick={() => applyStatFilter('addedInMonth')} active={filters.statFilter === 'addedInMonth'} />
+          <StatCard label="本月销户" value={stats?.cancelledInMonth || 0} onClick={() => applyStatFilter('cancelledInMonth')} active={filters.statFilter === 'cancelledInMonth'} />
+          <StatCard label="本月停机" value={stats?.stoppedInMonth || 0} onClick={() => applyStatFilter('stoppedInMonth')} active={filters.statFilter === 'stoppedInMonth'} />
           <StatCard label="预计总出账" value={money(stats?.expectedTotalBilling)} suffix=" 元" />
         </section>
 
