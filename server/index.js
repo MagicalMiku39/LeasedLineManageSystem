@@ -476,6 +476,13 @@ app.get('/api/stats', (req, res) => {
   const nextMonth = new Date(`${monthStart}T00:00:00`);
   nextMonth.setMonth(nextMonth.getMonth() + 1);
   const nextMonthStart = nextMonth.toISOString().slice(0, 10);
+  const normalStatus = '正常在用';
+  const stoppingStatus = '停机执行中';
+  const stoppedStatus = '停机';
+  const addedStatuses = [normalStatus, stoppingStatus, stoppedStatus];
+  const cancelledStatuses = ['欠费销户', '正式销户', '销户(订单处理中)', '销户（订单处理中）'];
+  const addedPlaceholders = addedStatuses.map(() => '?').join(', ');
+  const cancelledPlaceholders = cancelledStatuses.map(() => '?').join(', ');
 
   const total = db.prepare('SELECT COUNT(*) AS count FROM leased_line').get().count;
   const active = db.prepare(
@@ -489,28 +496,59 @@ app.get('/api/stats', (req, res) => {
   const addedInMonth = db.prepare(
     `SELECT COUNT(*) AS count FROM leased_line
      WHERE start_time >= ? AND start_time < ?
-       AND COALESCE(product_status_name, ledger_status, '') IN ('正常在用', '停机执行中', '停机')`
-  ).get(monthStart, nextMonthStart).count;
+       AND COALESCE(product_status_name, ledger_status, '') IN (${addedPlaceholders})`
+  ).get(monthStart, nextMonthStart, ...addedStatuses).count;
   const cancelledInMonth = db.prepare(
     `SELECT COUNT(*) AS count FROM leased_line
      WHERE status_time >= ? AND status_time < ?
-       AND COALESCE(product_status_name, ledger_status, '') IN ('欠费销户', '正式销户', '销户(订单处理中)', '销户（订单处理中）')`
-  ).get(monthStart, nextMonthStart).count;
+       AND COALESCE(product_status_name, ledger_status, '') IN (${cancelledPlaceholders})`
+  ).get(monthStart, nextMonthStart, ...cancelledStatuses).count;
   const stoppedInMonth = db.prepare(
     `SELECT COUNT(*) AS count FROM leased_line
      WHERE status_time >= ? AND status_time < ?
-       AND COALESCE(product_status_name, ledger_status, '') = '停机'`
-  ).get(monthStart, nextMonthStart).count;
+       AND COALESCE(product_status_name, ledger_status, '') = ?`
+  ).get(monthStart, nextMonthStart, stoppedStatus).count;
   const expectedMonthlyBilling = db.prepare(
-    `SELECT COALESCE(SUM(COALESCE(actual_monthly_fee, package_fee, 0)), 0) AS amount
+    `SELECT COALESCE(SUM(
+       CASE
+         WHEN COALESCE(product_status_name, ledger_status, '') = ?
+           THEN CASE WHEN COALESCE(actual_monthly_fee, 0) > 0 THEN actual_monthly_fee ELSE COALESCE(package_fee, 0) END
+         WHEN COALESCE(product_status_name, ledger_status, '') IN (?, ?)
+           AND status_time >= ? AND status_time < ?
+           THEN CASE WHEN COALESCE(actual_monthly_fee, 0) > 0 THEN actual_monthly_fee ELSE COALESCE(package_fee, 0) END
+         ELSE 0
+       END
+     ), 0) AS amount
      FROM leased_line
-     WHERE COALESCE(ledger_status, product_status_name, '') LIKE '%在用%'`
-  ).get().amount;
+     WHERE COALESCE(product_status_name, ledger_status, '') IN (${addedPlaceholders})`
+  ).get(normalStatus, stoppingStatus, stoppedStatus, monthStart, nextMonthStart, ...addedStatuses).amount;
   const expectedOneTimeBilling = db.prepare(
-    `SELECT COALESCE(SUM(COALESCE(one_time_fee, 0)), 0) AS amount
+    `SELECT COALESCE(SUM(
+       CASE
+         WHEN start_time >= ? AND start_time < ?
+           AND (
+             COALESCE(product_status_name, ledger_status, '') = ?
+             OR (
+               COALESCE(product_status_name, ledger_status, '') IN (?, ?)
+               AND status_time >= ? AND status_time < ?
+             )
+           )
+           THEN COALESCE(one_time_fee, 0)
+         ELSE 0
+       END
+     ), 0) AS amount
      FROM leased_line
-     WHERE one_time_fee_billing_month = ?`
-  ).get(month).amount;
+     WHERE COALESCE(product_status_name, ledger_status, '') IN (${addedPlaceholders})`
+  ).get(
+    monthStart,
+    nextMonthStart,
+    normalStatus,
+    stoppingStatus,
+    stoppedStatus,
+    monthStart,
+    nextMonthStart,
+    ...addedStatuses
+  ).amount;
 
   const byProduct = db.prepare(
     `SELECT COALESCE(product_name, '未填写') AS name, COUNT(*) AS count
