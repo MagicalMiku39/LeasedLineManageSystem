@@ -25,10 +25,10 @@ const visibleColumnsStorageKey = 'ledgerVisibleColumns:v2';
 
 const emptyFilters = {
   keyword: '',
-  region: '',
-  product: '',
-  status: '',
-  manager: '',
+  region: [],
+  product: [],
+  status: [],
+  manager: [],
   ledgerStatus: '',
   groupCode: '',
   groupProductCode: '',
@@ -161,15 +161,58 @@ function StatCard({ label, value, suffix, onClick, active }) {
   );
 }
 
-function SelectFilter({ value, onChange, options, label }) {
+function PeriodSummary({ title, added, cancelled }) {
   return (
-    <select value={value} onChange={(event) => onChange(event.target.value)} aria-label={label}>
-      <option value="">{label}</option>
-      {options.map((option) => (
-        <option key={option} value={option}>{option}</option>
-      ))}
-    </select>
+    <div className="period-summary-card">
+      <strong>{title}</strong>
+      <div>
+        <span className="period-added">新增 <b>{added || 0}</b></span>
+        <span className="period-cancelled">销户 <b>{cancelled || 0}</b></span>
+      </div>
+    </div>
   );
+}
+
+function MultiSelectFilter({ value, onChange, options, label }) {
+  const selected = Array.isArray(value) ? value : [];
+
+  function toggle(option) {
+    if (selected.includes(option)) {
+      onChange(selected.filter((item) => item !== option));
+    } else {
+      onChange([...selected, option]);
+    }
+  }
+
+  return (
+    <details className="multi-select">
+      <summary>{selected.length > 0 ? `${label}（${selected.length}）` : label}</summary>
+      <div className="multi-select-menu">
+        <div className="multi-select-actions">
+          <span>已选 {selected.length} 项</span>
+          <button type="button" onClick={() => onChange([])}>清空</button>
+        </div>
+        {options.map((option) => (
+          <label key={option}>
+            <input type="checkbox" checked={selected.includes(option)} onChange={() => toggle(option)} />
+            <span>{option}</span>
+          </label>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function filtersToSearchParams(filters, extra = {}) {
+  const params = new URLSearchParams(extra);
+  Object.entries(filters).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      if (value.length > 0) params.set(key, value.join('|'));
+    } else if (value) {
+      params.set(key, value);
+    }
+  });
+  return params;
 }
 
 function SetupView({ onReady }) {
@@ -577,14 +620,12 @@ function App() {
   });
 
   const queryString = useMemo(() => {
-    const params = new URLSearchParams({ page, pageSize: 20 });
-    Object.entries(filters).forEach(([key, value]) => value && params.set(key, value));
+    const params = filtersToSearchParams(filters, { page, pageSize: 20 });
     return params.toString();
   }, [filters, page]);
 
   const filterQueryString = useMemo(() => {
-    const params = new URLSearchParams();
-    Object.entries(filters).forEach(([key, value]) => value && params.set(key, value));
+    const params = filtersToSearchParams(filters);
     return params.toString();
   }, [filters]);
 
@@ -769,6 +810,18 @@ function App() {
       </header>
 
       {activeView === 'imports' ? <ImportRecords /> : <main>
+        <section className="period-summary-band">
+          <PeriodSummary
+            title={`${stats?.currentYear || new Date().getFullYear()} 年`}
+            added={stats?.addedInCurrentYear}
+            cancelled={stats?.cancelledInCurrentYear}
+          />
+          <PeriodSummary
+            title={`${stats?.currentYear || new Date().getFullYear()} 年第 ${stats?.currentQuarter || 1} 季度`}
+            added={stats?.addedInCurrentQuarter}
+            cancelled={stats?.cancelledInCurrentQuarter}
+          />
+        </section>
         <section className="stats-band">
           <div className="month-picker">
             <div className="month-picker-label">
@@ -795,10 +848,10 @@ function App() {
               placeholder="搜索集团编码、产品编码、客户、产品、经理、地址"
             />
           </div>
-          <SelectFilter label="归属区分" value={filters.region} options={options.regions || []} onChange={(value) => updateFilter('region', value)} />
-          <SelectFilter label="产品名称" value={filters.product} options={options.products || []} onChange={(value) => updateFilter('product', value)} />
-          <SelectFilter label="产品状态" value={filters.status} options={options.statuses || []} onChange={(value) => updateFilter('status', value)} />
-          <SelectFilter label="客户经理" value={filters.manager} options={options.managers || []} onChange={(value) => updateFilter('manager', value)} />
+          <MultiSelectFilter label="归属区分" value={filters.region} options={options.regions || []} onChange={(value) => updateFilter('region', value)} />
+          <MultiSelectFilter label="产品名称" value={filters.product} options={options.products || []} onChange={(value) => updateFilter('product', value)} />
+          <MultiSelectFilter label="产品状态" value={filters.status} options={options.statuses || []} onChange={(value) => updateFilter('status', value)} />
+          <MultiSelectFilter label="客户经理" value={filters.manager} options={options.managers || []} onChange={(value) => updateFilter('manager', value)} />
           <button onClick={() => { setPage(1); setFilters(emptyFilters); }}>清空</button>
         </section>
 

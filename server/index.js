@@ -163,6 +163,46 @@ function monthRange(month) {
   };
 }
 
+function currentShanghaiPeriod() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit'
+  }).formatToParts(new Date());
+  const year = Number(parts.find((part) => part.type === 'year')?.value);
+  const currentMonth = Number(parts.find((part) => part.type === 'month')?.value);
+  const quarter = Math.floor((currentMonth - 1) / 3) + 1;
+  const quarterStartMonth = (quarter - 1) * 3 + 1;
+  const nextQuarterMonth = quarterStartMonth + 3;
+  const quarterStart = `${year}-${String(quarterStartMonth).padStart(2, '0')}-01`;
+  const nextQuarterStart = nextQuarterMonth > 12
+    ? `${year + 1}-01-01`
+    : `${year}-${String(nextQuarterMonth).padStart(2, '0')}-01`;
+  return {
+    year,
+    quarter,
+    yearStart: `${year}-01-01`,
+    nextYearStart: `${year + 1}-01-01`,
+    quarterStart,
+    nextQuarterStart
+  };
+}
+
+function repairMojibake(value) {
+  if (typeof value !== 'string' || !/[\u00c0-\u00ff]/.test(value)) return value;
+  const decoded = Buffer.from(value, 'latin1').toString('utf8');
+  return /[\u3400-\u9fff]/.test(decoded) ? decoded : value;
+}
+
+function normalizeUploadedFilename(filename) {
+  return repairMojibake(String(filename || ''));
+}
+
+function parseMultiValue(value) {
+  if (!value) return [];
+  return String(value).split('|').map((item) => item.trim()).filter(Boolean);
+}
+
 function buildLedgerWhere(query) {
   const where = [];
   const params = [];
@@ -187,9 +227,10 @@ function buildLedgerWhere(query) {
   };
 
   for (const [key, column] of Object.entries(exactFilters)) {
-    if (query[key]) {
-      where.push(`${column} = ?`);
-      params.push(query[key]);
+    const values = parseMultiValue(query[key]);
+    if (values.length > 0) {
+      where.push(`${column} IN (${values.map(() => '?').join(', ')})`);
+      params.push(...values);
     }
   }
 
@@ -259,7 +300,7 @@ app.post('/api/import', upload.single('file'), (req, res) => {
   }
 
   try {
-    const result = importExcel(req.file.path, req.file.originalname);
+    const result = importExcel(req.file.path, normalizeUploadedFilename(req.file.originalname));
     res.json(result);
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -268,7 +309,12 @@ app.post('/api/import', upload.single('file'), (req, res) => {
 
 app.get('/api/imports', (_req, res) => {
   const rows = db.prepare('SELECT * FROM import_batch ORDER BY imported_at DESC LIMIT 30').all();
-  res.json(rows);
+  res.json(rows.map((row) => ({
+    ...row,
+    file_name: repairMojibake(row.file_name),
+    sheet_name: repairMojibake(row.sheet_name),
+    message: repairMojibake(row.message)
+  })));
 });
 
 app.get('/api/imports/:id/rows', (req, res) => {
@@ -279,7 +325,11 @@ app.get('/api/imports/:id/rows', (req, res) => {
      ORDER BY row_number ASC
      LIMIT 100`
   ).all(req.params.id);
-  res.json(rows);
+  res.json(rows.map((row) => ({
+    ...row,
+    result: repairMojibake(row.result),
+    message: repairMojibake(row.message)
+  })));
 });
 
 app.get('/api/ledger', (req, res) => {
@@ -521,6 +571,7 @@ app.get('/api/options', (_req, res) => {
 
 app.get('/api/stats', (req, res) => {
   const { month, monthStart, nextMonthStart } = monthRange(req.query.month);
+  const currentPeriod = currentShanghaiPeriod();
   const addedPlaceholders = addedStatuses.map(() => '?').join(', ');
   const cancelledPlaceholders = cancelledStatuses.map(() => '?').join(', ');
 
@@ -548,6 +599,26 @@ app.get('/api/stats', (req, res) => {
      WHERE status_time >= ? AND status_time < ?
        AND COALESCE(product_status_name, ledger_status, '') = ?`
   ).get(monthStart, nextMonthStart, stoppedStatus).count;
+  const addedInCurrentYear = db.prepare(
+    `SELECT COUNT(*) AS count FROM leased_line
+     WHERE start_time >= ? AND start_time < ?
+       AND COALESCE(product_status_name, ledger_status, '') IN (${addedPlaceholders})`
+  ).get(currentPeriod.yearStart, currentPeriod.nextYearStart, ...addedStatuses).count;
+  const cancelledInCurrentYear = db.prepare(
+    `SELECT COUNT(*) AS count FROM leased_line
+     WHERE status_time >= ? AND status_time < ?
+       AND COALESCE(product_status_name, ledger_status, '') IN (${cancelledPlaceholders})`
+  ).get(currentPeriod.yearStart, currentPeriod.nextYearStart, ...cancelledStatuses).count;
+  const addedInCurrentQuarter = db.prepare(
+    `SELECT COUNT(*) AS count FROM leased_line
+     WHERE start_time >= ? AND start_time < ?
+       AND COALESCE(product_status_name, ledger_status, '') IN (${addedPlaceholders})`
+  ).get(currentPeriod.quarterStart, currentPeriod.nextQuarterStart, ...addedStatuses).count;
+  const cancelledInCurrentQuarter = db.prepare(
+    `SELECT COUNT(*) AS count FROM leased_line
+     WHERE status_time >= ? AND status_time < ?
+       AND COALESCE(product_status_name, ledger_status, '') IN (${cancelledPlaceholders})`
+  ).get(currentPeriod.quarterStart, currentPeriod.nextQuarterStart, ...cancelledStatuses).count;
   const expectedMonthlyBilling = db.prepare(
     `SELECT COALESCE(SUM(
        CASE
@@ -604,6 +675,12 @@ app.get('/api/stats', (req, res) => {
     addedInMonth,
     cancelledInMonth,
     stoppedInMonth,
+    currentYear: currentPeriod.year,
+    currentQuarter: currentPeriod.quarter,
+    addedInCurrentYear,
+    cancelledInCurrentYear,
+    addedInCurrentQuarter,
+    cancelledInCurrentQuarter,
     expectedMonthlyBilling,
     expectedOneTimeBilling,
     expectedTotalBilling: expectedMonthlyBilling + expectedOneTimeBilling,
