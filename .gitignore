@@ -9,6 +9,10 @@ data/
 uploads/
 certs/
 
+# Local Codex skill install artifacts
+.agents/
+skills-lock.json
+
 # Local logs and temp files
 *.log
 *.tmp

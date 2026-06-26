@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
+  ArrowDownWideNarrow,
   BarChart3,
   CheckSquare,
   Columns3,
@@ -16,9 +17,11 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Upload,
+  UsersRound,
   X
 } from 'lucide-react';
 import './styles.css';
+import './apple-ui.css';
 
 const apiBase = '/api';
 const visibleColumnsStorageKey = 'ledgerVisibleColumns:v2';
@@ -141,6 +144,23 @@ const fieldLabels = {
 function money(value) {
   const number = Number(value || 0);
   return number.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function signedNumber(value) {
+  const number = Number(value || 0);
+  return `${number > 0 ? '+' : ''}${number.toLocaleString('zh-CN')}`;
+}
+
+function signedMoney(value) {
+  const number = Number(value || 0);
+  return `${number > 0 ? '+' : ''}${money(number)}`;
+}
+
+function netClass(value) {
+  const number = Number(value || 0);
+  if (number > 0) return 'net-positive';
+  if (number < 0) return 'net-negative';
+  return 'net-zero';
 }
 
 function StatCard({ label, value, suffix, onClick, active }) {
@@ -597,6 +617,136 @@ function BatchModal({ ids, onClose, onSaved }) {
   );
 }
 
+function ManagerDashboard({
+  month,
+  setMonth,
+  options,
+  selectedManagers,
+  setSelectedManagers,
+  sort,
+  setSort,
+  data,
+  loading,
+  reload
+}) {
+  const rows = data?.rows || [];
+  const sortOptions = [
+    { value: 'yearScaleNet', label: '年度规模净增' },
+    { value: 'yearIncomeNet', label: '年度收入净增' },
+    { value: 'quarterScaleNet', label: '季度规模净增' },
+    { value: 'quarterIncomeNet', label: '季度收入净增' },
+    { value: 'monthScaleNet', label: '月度规模净增' },
+    { value: 'monthIncomeNet', label: '月度收入净增' }
+  ];
+
+  function renderNetCell(scale, income) {
+    return (
+      <div className="manager-net-cell">
+        <strong className={netClass(scale)}>{signedNumber(scale)}</strong>
+        <span className={netClass(income)}>{signedMoney(income)} 元</span>
+      </div>
+    );
+  }
+
+  function renderDetailCell(addedCount, cancelledCount, addedIncome, cancelledIncome) {
+    return (
+      <div className="manager-detail-cell">
+        <span>新增 {addedCount || 0} 条 / {money(addedIncome)} 元</span>
+        <span>销户 {cancelledCount || 0} 条 / {money(cancelledIncome)} 元</span>
+      </div>
+    );
+  }
+
+  return (
+    <main>
+      <section className="manager-hero">
+        <div>
+          <p>客户经理数据展示</p>
+          <h2>规模与收入净增</h2>
+          <span>按所选月份自动统计本月、所在季度和年度，未选择客户经理时展示全部。</span>
+        </div>
+        <div className="manager-hero-actions">
+          <label>
+            统计月份
+            <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
+          </label>
+          <label>
+            高到低排序
+            <select value={sort} onChange={(event) => setSort(event.target.value)}>
+              {sortOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <button onClick={reload}>
+            <RefreshCw size={16} /> 刷新
+          </button>
+        </div>
+      </section>
+
+      <section className="manager-filter-band">
+        <MultiSelectFilter
+          label="选择客户经理"
+          value={selectedManagers}
+          options={options.managers || []}
+          onChange={setSelectedManagers}
+        />
+        <button onClick={() => setSelectedManagers([])}>清空选择</button>
+        <div className="manager-period-note">
+          <span>{data?.year || new Date().getFullYear()} 年</span>
+          <span>第 {data?.quarter || 1} 季度</span>
+          <span>{data?.month || month}</span>
+          {loading && <em>加载中</em>}
+        </div>
+      </section>
+
+      <section className="table-shell manager-table-shell">
+        <div className="table-title">
+          <div className="table-title-left">
+            <ArrowDownWideNarrow size={18} />
+            <span>客户经理排名</span>
+            <strong>{selectedManagers.length > 0 ? `已选 ${selectedManagers.length} 人` : '全部客户经理'}</strong>
+          </div>
+          <span className="subtle">当前共 {rows.length} 人</span>
+        </div>
+        <div className="table-scroll manager-table-scroll">
+          <table className="manager-table">
+            <thead>
+              <tr>
+                <th>客户经理</th>
+                <th>本月净增</th>
+                <th>本月明细</th>
+                <th>本季度净增</th>
+                <th>本季度明细</th>
+                <th>本年度净增</th>
+                <th>本年度明细</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.manager_name}>
+                  <td><strong>{row.manager_name}</strong></td>
+                  <td>{renderNetCell(row.month_scale_net, row.month_income_net)}</td>
+                  <td>{renderDetailCell(row.month_added_count, row.month_cancelled_count, row.month_added_income, row.month_cancelled_income)}</td>
+                  <td>{renderNetCell(row.quarter_scale_net, row.quarter_income_net)}</td>
+                  <td>{renderDetailCell(row.quarter_added_count, row.quarter_cancelled_count, row.quarter_added_income, row.quarter_cancelled_income)}</td>
+                  <td>{renderNetCell(row.year_scale_net, row.year_income_net)}</td>
+                  <td>{renderDetailCell(row.year_added_count, row.year_cancelled_count, row.year_added_income, row.year_cancelled_income)}</td>
+                </tr>
+              ))}
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan="7" className="empty">暂无客户经理统计数据</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  );
+}
+
 function App() {
   const [auth, setAuth] = useState({ loading: true, configured: true, user: null });
   const [activeView, setActiveView] = useState('ledger');
@@ -607,6 +757,10 @@ function App() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [managerSelection, setManagerSelection] = useState([]);
+  const [managerSort, setManagerSort] = useState('yearScaleNet');
+  const [managerPerformance, setManagerPerformance] = useState(null);
+  const [managerLoading, setManagerLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [selected, setSelected] = useState(null);
@@ -676,6 +830,17 @@ function App() {
     setOptions(await response.json());
   }
 
+  async function loadManagerPerformance() {
+    setManagerLoading(true);
+    const params = new URLSearchParams({ month, sort: managerSort });
+    if (managerSelection.length > 0) {
+      params.set('managers', managerSelection.join('|'));
+    }
+    const response = await fetch(`${apiBase}/manager-performance?${params.toString()}`);
+    setManagerPerformance(await response.json());
+    setManagerLoading(false);
+  }
+
   useEffect(() => {
     localStorage.setItem(visibleColumnsStorageKey, JSON.stringify(visibleColumns));
   }, [visibleColumns]);
@@ -699,6 +864,11 @@ function App() {
     if (!auth.user) return;
     loadOptions();
   }, [auth.user]);
+
+  useEffect(() => {
+    if (!auth.user || activeView !== 'managers') return;
+    loadManagerPerformance();
+  }, [auth.user, activeView, month, managerSort, managerSelection]);
 
   async function uploadExcel(event) {
     const file = event.target.files?.[0];
@@ -788,6 +958,9 @@ function App() {
             <button className={activeView === 'ledger' ? 'active' : ''} onClick={() => setActiveView('ledger')}>
               <FileSpreadsheet size={16} /> 台账
             </button>
+            <button className={activeView === 'managers' ? 'active' : ''} onClick={() => setActiveView('managers')}>
+              <UsersRound size={16} /> 客户经理
+            </button>
             <button className={activeView === 'imports' ? 'active' : ''} onClick={() => setActiveView('imports')}>
               <History size={16} /> 导入记录
             </button>
@@ -800,7 +973,7 @@ function App() {
           <button onClick={exportLedger}>
             <Download size={16} /> 导出
           </button>
-          <button onClick={() => { loadLedger(); loadStats(); loadOptions(); }}>
+          <button onClick={() => { loadLedger(); loadStats(); loadOptions(); if (activeView === 'managers') loadManagerPerformance(); }}>
             <RefreshCw size={16} /> 刷新
           </button>
           <button onClick={logout}>
@@ -809,7 +982,20 @@ function App() {
         </div>
       </header>
 
-      {activeView === 'imports' ? <ImportRecords /> : <main>
+      {activeView === 'imports' ? <ImportRecords /> : activeView === 'managers' ? (
+        <ManagerDashboard
+          month={month}
+          setMonth={setMonth}
+          options={options}
+          selectedManagers={managerSelection}
+          setSelectedManagers={setManagerSelection}
+          sort={managerSort}
+          setSort={setManagerSort}
+          data={managerPerformance}
+          loading={managerLoading}
+          reload={loadManagerPerformance}
+        />
+      ) : <main>
         <section className="period-summary-band">
           <PeriodSummary
             title={`${stats?.currentYear || new Date().getFullYear()} 年`}
