@@ -594,100 +594,103 @@ app.get('/api/options', (_req, res) => {
 });
 
 app.get('/api/manager-performance', (req, res) => {
-  const period = periodFromMonth(req.query.month);
-  const selectedManagers = parseMultiValue(req.query.managers);
-  const managerWhere = selectedManagers.length > 0
-    ? `WHERE manager_name IN (${selectedManagers.map(() => '?').join(', ')})`
-    : '';
-  const addedPlaceholders = addedStatuses.map(() => '?').join(', ');
-  const cancelledPlaceholders = cancelledStatuses.map(() => '?').join(', ');
-  const sortMap = {
-    monthScaleNet: 'month_scale_net',
-    monthIncomeNet: 'month_income_net',
-    quarterScaleNet: 'quarter_scale_net',
-    quarterIncomeNet: 'quarter_income_net',
-    yearScaleNet: 'year_scale_net',
-    yearIncomeNet: 'year_income_net'
-  };
-  const sortColumn = sortMap[req.query.sort] || sortMap.yearScaleNet;
-
-  function metricSql(prefix, startField, start, end, statuses) {
-    const placeholders = statuses.map(() => '?').join(', ');
-    return {
-      count: `SUM(CASE WHEN ${startField} >= ? AND ${startField} < ? AND status_name IN (${placeholders}) THEN 1 ELSE 0 END) AS ${prefix}_count`,
-      income: `SUM(CASE WHEN ${startField} >= ? AND ${startField} < ? AND status_name IN (${placeholders}) THEN monthly_fee ELSE 0 END) AS ${prefix}_income`,
-      params: [start, end, ...statuses, start, end, ...statuses]
+  try {
+    const period = periodFromMonth(req.query.month);
+    const selectedManagers = parseMultiValue(req.query.managers);
+    const managerWhere = selectedManagers.length > 0
+      ? `WHERE manager_name IN (${selectedManagers.map(() => '?').join(', ')})`
+      : '';
+    const sortMap = {
+      monthScaleNet: 'month_scale_net',
+      monthIncomeNet: 'month_income_net',
+      quarterScaleNet: 'quarter_scale_net',
+      quarterIncomeNet: 'quarter_income_net',
+      yearScaleNet: 'year_scale_net',
+      yearIncomeNet: 'year_income_net'
     };
-  }
+    const sortColumn = sortMap[req.query.sort] || sortMap.yearScaleNet;
 
-  const monthAdded = metricSql('month_added', 'start_time', period.monthStart, period.nextMonthStart, addedStatuses);
-  const monthCancelled = metricSql('month_cancelled', 'status_time', period.monthStart, period.nextMonthStart, cancelledStatuses);
-  const quarterAdded = metricSql('quarter_added', 'start_time', period.quarterStart, period.nextQuarterStart, addedStatuses);
-  const quarterCancelled = metricSql('quarter_cancelled', 'status_time', period.quarterStart, period.nextQuarterStart, cancelledStatuses);
-  const yearAdded = metricSql('year_added', 'start_time', period.yearStart, period.nextYearStart, addedStatuses);
-  const yearCancelled = metricSql('year_cancelled', 'status_time', period.yearStart, period.nextYearStart, cancelledStatuses);
+    function metricSql(prefix, startField, start, end, statuses) {
+      const placeholders = statuses.map(() => '?').join(', ');
+      return {
+        count: `SUM(CASE WHEN ${startField} >= ? AND ${startField} < ? AND status_name IN (${placeholders}) THEN 1 ELSE 0 END) AS ${prefix}_count`,
+        income: `SUM(CASE WHEN ${startField} >= ? AND ${startField} < ? AND status_name IN (${placeholders}) THEN monthly_fee ELSE 0 END) AS ${prefix}_income`,
+        params: [start, end, ...statuses, start, end, ...statuses]
+      };
+    }
 
-  const metrics = [
-    monthAdded,
-    monthCancelled,
-    quarterAdded,
-    quarterCancelled,
-    yearAdded,
-    yearCancelled
-  ];
-  const metricColumns = metrics.flatMap((metric) => [metric.count, metric.income]).join(',\n        ');
-  const metricParams = metrics.flatMap((metric) => metric.params);
+    const monthAdded = metricSql('month_added', 'start_time', period.monthStart, period.nextMonthStart, addedStatuses);
+    const monthCancelled = metricSql('month_cancelled', 'status_time', period.monthStart, period.nextMonthStart, cancelledStatuses);
+    const quarterAdded = metricSql('quarter_added', 'start_time', period.quarterStart, period.nextQuarterStart, addedStatuses);
+    const quarterCancelled = metricSql('quarter_cancelled', 'status_time', period.quarterStart, period.nextQuarterStart, cancelledStatuses);
+    const yearAdded = metricSql('year_added', 'start_time', period.yearStart, period.nextYearStart, addedStatuses);
+    const yearCancelled = metricSql('year_cancelled', 'status_time', period.yearStart, period.nextYearStart, cancelledStatuses);
 
-  const rows = db.prepare(
-    `WITH base AS (
-       SELECT
-         COALESCE(NULLIF(manager_name, ''), '未填写') AS manager_name,
-         start_time,
-         status_time,
-         COALESCE(product_status_name, ledger_status, '') AS status_name,
-         CASE WHEN COALESCE(actual_monthly_fee, 0) > 0 THEN actual_monthly_fee ELSE COALESCE(package_fee, 0) END AS monthly_fee
-       FROM leased_line
-       ${managerWhere}
-     ),
-     summary AS (
+    const metrics = [
+      monthAdded,
+      monthCancelled,
+      quarterAdded,
+      quarterCancelled,
+      yearAdded,
+      yearCancelled
+    ];
+    const metricColumns = metrics.flatMap((metric) => [metric.count, metric.income]).join(',\n        ');
+    const metricParams = metrics.flatMap((metric) => metric.params);
+
+    const rows = db.prepare(
+      `WITH base AS (
+         SELECT
+           COALESCE(NULLIF(manager_name, ''), '未填写') AS manager_name,
+           start_time,
+           status_time,
+           COALESCE(product_status_name, ledger_status, '') AS status_name,
+           CASE WHEN COALESCE(actual_monthly_fee, 0) > 0 THEN actual_monthly_fee ELSE COALESCE(package_fee, 0) END AS monthly_fee
+         FROM leased_line
+         ${managerWhere}
+       ),
+       summary AS (
+         SELECT
+           manager_name,
+           ${metricColumns}
+         FROM base
+         GROUP BY manager_name
+       )
        SELECT
          manager_name,
-         ${metricColumns}
-       FROM base
-       GROUP BY manager_name
-     )
-     SELECT
-       manager_name,
-       COALESCE(month_added_count, 0) AS month_added_count,
-       COALESCE(month_cancelled_count, 0) AS month_cancelled_count,
-       COALESCE(month_added_count, 0) - COALESCE(month_cancelled_count, 0) AS month_scale_net,
-       COALESCE(month_added_income, 0) AS month_added_income,
-       COALESCE(month_cancelled_income, 0) AS month_cancelled_income,
-       COALESCE(month_added_income, 0) - COALESCE(month_cancelled_income, 0) AS month_income_net,
-       COALESCE(quarter_added_count, 0) AS quarter_added_count,
-       COALESCE(quarter_cancelled_count, 0) AS quarter_cancelled_count,
-       COALESCE(quarter_added_count, 0) - COALESCE(quarter_cancelled_count, 0) AS quarter_scale_net,
-       COALESCE(quarter_added_income, 0) AS quarter_added_income,
-       COALESCE(quarter_cancelled_income, 0) AS quarter_cancelled_income,
-       COALESCE(quarter_added_income, 0) - COALESCE(quarter_cancelled_income, 0) AS quarter_income_net,
-       COALESCE(year_added_count, 0) AS year_added_count,
-       COALESCE(year_cancelled_count, 0) AS year_cancelled_count,
-       COALESCE(year_added_count, 0) - COALESCE(year_cancelled_count, 0) AS year_scale_net,
-       COALESCE(year_added_income, 0) AS year_added_income,
-       COALESCE(year_cancelled_income, 0) AS year_cancelled_income,
-       COALESCE(year_added_income, 0) - COALESCE(year_cancelled_income, 0) AS year_income_net
-     FROM summary
-     ORDER BY ${sortColumn} DESC, manager_name ASC`
-  ).all(...selectedManagers, ...metricParams);
+         COALESCE(month_added_count, 0) AS month_added_count,
+         COALESCE(month_cancelled_count, 0) AS month_cancelled_count,
+         COALESCE(month_added_count, 0) - COALESCE(month_cancelled_count, 0) AS month_scale_net,
+         COALESCE(month_added_income, 0) AS month_added_income,
+         COALESCE(month_cancelled_income, 0) AS month_cancelled_income,
+         COALESCE(month_added_income, 0) - COALESCE(month_cancelled_income, 0) AS month_income_net,
+         COALESCE(quarter_added_count, 0) AS quarter_added_count,
+         COALESCE(quarter_cancelled_count, 0) AS quarter_cancelled_count,
+         COALESCE(quarter_added_count, 0) - COALESCE(quarter_cancelled_count, 0) AS quarter_scale_net,
+         COALESCE(quarter_added_income, 0) AS quarter_added_income,
+         COALESCE(quarter_cancelled_income, 0) AS quarter_cancelled_income,
+         COALESCE(quarter_added_income, 0) - COALESCE(quarter_cancelled_income, 0) AS quarter_income_net,
+         COALESCE(year_added_count, 0) AS year_added_count,
+         COALESCE(year_cancelled_count, 0) AS year_cancelled_count,
+         COALESCE(year_added_count, 0) - COALESCE(year_cancelled_count, 0) AS year_scale_net,
+         COALESCE(year_added_income, 0) AS year_added_income,
+         COALESCE(year_cancelled_income, 0) AS year_cancelled_income,
+         COALESCE(year_added_income, 0) - COALESCE(year_cancelled_income, 0) AS year_income_net
+       FROM summary
+       ORDER BY ${sortColumn} DESC, manager_name ASC`
+    ).all(...selectedManagers, ...metricParams);
 
-  res.json({
-    month: period.month,
-    year: period.year,
-    quarter: period.quarter,
-    selectedManagers,
-    sort: req.query.sort || 'yearScaleNet',
-    rows
-  });
+    res.json({
+      month: period.month,
+      year: period.year,
+      quarter: period.quarter,
+      selectedManagers,
+      sort: req.query.sort || 'yearScaleNet',
+      rows
+    });
+  } catch (error) {
+    console.error('manager-performance failed:', error);
+    res.status(500).json({ error: `客户经理统计失败：${error.message}` });
+  }
 });
 
 app.get('/api/stats', (req, res) => {

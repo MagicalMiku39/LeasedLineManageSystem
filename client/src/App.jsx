@@ -627,6 +627,7 @@ function ManagerDashboard({
   setSort,
   data,
   loading,
+  error,
   reload
 }) {
   const rows = data?.rows || [];
@@ -700,6 +701,8 @@ function ManagerDashboard({
         </div>
       </section>
 
+      {error && <div className="manager-error">{error}</div>}
+
       <section className="table-shell manager-table-shell">
         <div className="table-title">
           <div className="table-title-left">
@@ -761,6 +764,7 @@ function App() {
   const [managerSort, setManagerSort] = useState('yearScaleNet');
   const [managerPerformance, setManagerPerformance] = useState(null);
   const [managerLoading, setManagerLoading] = useState(false);
+  const [managerError, setManagerError] = useState('');
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [selected, setSelected] = useState(null);
@@ -832,13 +836,30 @@ function App() {
 
   async function loadManagerPerformance() {
     setManagerLoading(true);
-    const params = new URLSearchParams({ month, sort: managerSort });
-    if (managerSelection.length > 0) {
-      params.set('managers', managerSelection.join('|'));
+    setManagerError('');
+    try {
+      const params = new URLSearchParams({ month, sort: managerSort });
+      if (managerSelection.length > 0) {
+        params.set('managers', managerSelection.join('|'));
+      }
+      const response = await fetch(`${apiBase}/manager-performance?${params.toString()}`);
+      const text = await response.text();
+      let data = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        throw new Error(`客户经理统计接口返回异常：${text.slice(0, 120) || response.status}`);
+      }
+      if (!response.ok) {
+        throw new Error(data?.error || `客户经理统计接口请求失败：${response.status}`);
+      }
+      setManagerPerformance(data);
+    } catch (error) {
+      setManagerPerformance({ rows: [] });
+      setManagerError(error.message || '客户经理统计加载失败');
+    } finally {
+      setManagerLoading(false);
     }
-    const response = await fetch(`${apiBase}/manager-performance?${params.toString()}`);
-    setManagerPerformance(await response.json());
-    setManagerLoading(false);
   }
 
   useEffect(() => {
@@ -993,6 +1014,7 @@ function App() {
           setSort={setManagerSort}
           data={managerPerformance}
           loading={managerLoading}
+          error={managerError}
           reload={loadManagerPerformance}
         />
       ) : <main>

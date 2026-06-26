@@ -732,6 +732,17 @@ label {
   font-style: normal;
 }
 
+.manager-error {
+  margin: -4px 0 16px;
+  padding: 12px 14px;
+  border: 1px solid rgba(217, 45, 32, .22);
+  border-radius: 16px;
+  background: rgba(255, 242, 240, .88);
+  color: #b42318;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .manager-table-shell {
   margin-top: 0;
 }
