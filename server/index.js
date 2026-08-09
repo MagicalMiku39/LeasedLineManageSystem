@@ -145,6 +145,22 @@ const manualLedgerColumns = [
   'updated_at'
 ];
 
+const ledgerSortableColumns = new Set([...originalLedgerColumns, ...manualLedgerColumns]);
+
+function ledgerOrderBy(query) {
+  const sortBy = ledgerSortableColumns.has(query.sortBy) ? query.sortBy : 'updated_at';
+  const direction = query.sortDirection === 'asc' ? 'ASC' : 'DESC';
+  const expression = sortBy === 'ledger_status'
+    ? "COALESCE(NULLIF(ledger_status, ''), product_status_name)"
+    : sortBy;
+
+  return {
+    sortBy,
+    sortDirection: direction.toLowerCase(),
+    sql: `ORDER BY CASE WHEN ${expression} IS NULL OR TRIM(CAST(${expression} AS TEXT)) = '' THEN 1 ELSE 0 END ASC, ${expression} ${direction}, id DESC`
+  };
+}
+
 const normalStatus = '正常在用';
 const stoppingStatus = '停机执行中';
 const stoppedStatus = '停机';
@@ -361,6 +377,7 @@ app.get('/api/ledger', (req, res) => {
   const pageSize = Math.min(100, Math.max(10, Number(req.query.pageSize || 20)));
   const offset = (page - 1) * pageSize;
   const where = buildLedgerWhere(req.query);
+  const order = ledgerOrderBy(req.query);
 
   const total = db.prepare(`SELECT COUNT(*) AS count FROM leased_line ${where.sql}`).get(...where.params).count;
   const rows = db.prepare(
@@ -368,11 +385,11 @@ app.get('/api/ledger', (req, res) => {
       id, ${[...originalLedgerColumns, ...manualLedgerColumns].join(', ')}
      FROM leased_line
      ${where.sql}
-     ORDER BY updated_at DESC, id DESC
+     ${order.sql}
      LIMIT ? OFFSET ?`
   ).all(...where.params, pageSize, offset);
 
-  res.json({ rows, page, pageSize, total });
+  res.json({ rows, page, pageSize, total, sortBy: order.sortBy, sortDirection: order.sortDirection });
 });
 
 const exportColumns = [
@@ -436,11 +453,12 @@ const exportColumns = [
 
 app.get('/api/ledger/export', (req, res) => {
   const where = buildLedgerWhere(req.query);
+  const order = ledgerOrderBy(req.query);
   const rows = db.prepare(
     `SELECT ${exportColumns.map(([, column]) => column).join(', ')}
      FROM leased_line
      ${where.sql}
-     ORDER BY updated_at DESC, id DESC`
+     ${order.sql}`
   ).all(...where.params);
 
   const data = rows.map((row) => {

@@ -513,6 +513,44 @@ th {
   -webkit-backdrop-filter: blur(16px);
 }
 
+.sort-header {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 5px;
+  width: 100%;
+  min-height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  text-align: left;
+}
+
+.sort-header:hover,
+.sort-header.active {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--accent-ink);
+}
+
+.sort-indicator {
+  width: 12px;
+  color: #9ca3af;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.sort-header.active .sort-indicator {
+  color: var(--accent);
+}
+
 tbody tr {
   transition: background .16s ease;
 }

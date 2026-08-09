@@ -759,6 +759,7 @@ function App() {
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [ledgerSort, setLedgerSort] = useState({ key: 'updated_at', direction: 'desc' });
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
   const [managerSelection, setManagerSelection] = useState([]);
   const [managerSort, setManagerSort] = useState('yearScaleNet');
@@ -778,14 +779,22 @@ function App() {
   });
 
   const queryString = useMemo(() => {
-    const params = filtersToSearchParams(filters, { page, pageSize: 20 });
+    const params = filtersToSearchParams(filters, {
+      page,
+      pageSize: 20,
+      sortBy: ledgerSort.key,
+      sortDirection: ledgerSort.direction
+    });
     return params.toString();
-  }, [filters, page]);
+  }, [filters, page, ledgerSort]);
 
   const filterQueryString = useMemo(() => {
-    const params = filtersToSearchParams(filters);
+    const params = filtersToSearchParams(filters, {
+      sortBy: ledgerSort.key,
+      sortDirection: ledgerSort.direction
+    });
     return params.toString();
-  }, [filters]);
+  }, [filters, ledgerSort]);
 
   const activeColumns = tableColumns.filter((column) => visibleColumns.includes(column.key));
   const advancedFilterCount = [
@@ -802,6 +811,14 @@ function App() {
   function updateFilter(key, value) {
     setPage(1);
     setFilters((current) => ({ ...current, [key]: value }));
+  }
+
+  function toggleLedgerSort(key) {
+    setPage(1);
+    setLedgerSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === 'asc' ? 'desc' : 'asc'
+    }));
   }
 
   function applyStatFilter(statFilter) {
@@ -1153,7 +1170,23 @@ function App() {
                       onChange={(event) => toggleAllRows(event.target.checked)}
                     />
                   </th>
-                  {activeColumns.map((column) => <th key={column.key}>{column.label}</th>)}
+                  {activeColumns.map((column) => {
+                    const isSorted = ledgerSort.key === column.key;
+                    const directionLabel = isSorted && ledgerSort.direction === 'asc' ? '升序' : '降序';
+                    return (
+                      <th key={column.key} aria-sort={isSorted ? (ledgerSort.direction === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                        <button
+                          type="button"
+                          className={`sort-header${isSorted ? ' active' : ''}`}
+                          onClick={() => toggleLedgerSort(column.key)}
+                          title={`按${column.label}${isSorted ? directionLabel : '排序'}`}
+                        >
+                          <span>{column.label}</span>
+                          <span className="sort-indicator" aria-hidden="true">{isSorted ? (ledgerSort.direction === 'asc' ? '↑' : '↓') : '↕'}</span>
+                        </button>
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
