@@ -47,7 +47,11 @@ function createInsertStatement() {
 
 function createUpdateStatement() {
   const columns = [...dbColumns, 'ledger_status', 'import_batch_id', 'updated_at'];
-  const assignments = columns.map((column) => `${column} = ?`).join(', ');
+  const assignments = columns
+    .map((column) => (column === 'package_fee'
+      ? `${column} = COALESCE(?, ${column})`
+      : `${column} = ?`))
+    .join(', ');
   return {
     columns,
     statement: db.prepare(`UPDATE leased_line SET ${assignments} WHERE id = ?`)
