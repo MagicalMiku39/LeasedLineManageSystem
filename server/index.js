@@ -166,6 +166,31 @@ const stoppingStatus = '停机执行中';
 const stoppedStatus = '停机';
 const addedStatuses = [normalStatus, stoppingStatus, stoppedStatus];
 const cancelledStatuses = ['欠费销户', '正式销户', '销户(订单处理中)', '销户（订单处理中）'];
+const kpiProductNames = [
+  '互联网专线',
+  '传输专线',
+  'OTN政企专网',
+  '跨省互联网专线',
+  '国际政企专网专线',
+  '新跨省专线产品',
+  'SPN专线',
+  'MPLS VPN专线',
+  '跨国专线A类产品',
+  '跨省专线产品'
+];
+const kpiProductSqlList = kpiProductNames
+  .map((name) => `'${name.replaceAll("'", "''")}'`)
+  .join(', ');
+
+function isKpiMode(query) {
+  return String(query.kpiMode ?? '1') !== '0';
+}
+
+function leasedLineSource(query) {
+  return isKpiMode(query)
+    ? `(SELECT * FROM leased_line WHERE product_name IN (${kpiProductSqlList}))`
+    : 'leased_line';
+}
 
 function monthRange(month) {
   const normalized = String(month || new Date().toISOString().slice(0, 7)).slice(0, 7);
@@ -246,6 +271,10 @@ function parseMultiValue(value) {
 function buildLedgerWhere(query) {
   const where = [];
   const params = [];
+
+  if (isKpiMode(query)) {
+    where.push(`product_name IN (${kpiProductSqlList})`);
+  }
 
   if (query.keyword) {
     const keyword = `%${query.keyword.trim()}%`;
@@ -389,7 +418,15 @@ app.get('/api/ledger', (req, res) => {
      LIMIT ? OFFSET ?`
   ).all(...where.params, pageSize, offset);
 
-  res.json({ rows, page, pageSize, total, sortBy: order.sortBy, sortDirection: order.sortDirection });
+  res.json({
+    rows,
+    page,
+    pageSize,
+    total,
+    sortBy: order.sortBy,
+    sortDirection: order.sortDirection,
+    kpiMode: isKpiMode(req.query)
+  });
 });
 
 const exportColumns = [
@@ -614,6 +651,7 @@ app.get('/api/options', (_req, res) => {
 app.get('/api/manager-performance', (req, res) => {
   try {
     const period = periodFromMonth(req.query.month);
+    const source = leasedLineSource(req.query);
     const selectedManagers = parseMultiValue(req.query.managers);
     const managerWhere = selectedManagers.length > 0
       ? `WHERE manager_name IN (${selectedManagers.map(() => '?').join(', ')})`
@@ -663,7 +701,7 @@ app.get('/api/manager-performance', (req, res) => {
            status_time,
            COALESCE(product_status_name, ledger_status, '') AS status_name,
            CASE WHEN COALESCE(actual_monthly_fee, 0) > 0 THEN actual_monthly_fee ELSE COALESCE(package_fee, 0) END AS monthly_fee
-         FROM leased_line
+         FROM ${source}
          ${managerWhere}
        ),
        summary AS (
@@ -703,6 +741,7 @@ app.get('/api/manager-performance', (req, res) => {
       quarter: period.quarter,
       selectedManagers,
       sort: req.query.sort || 'yearScaleNet',
+      kpiMode: isKpiMode(req.query),
       rows
     });
   } catch (error) {
@@ -714,50 +753,51 @@ app.get('/api/manager-performance', (req, res) => {
 app.get('/api/stats', (req, res) => {
   const { month, monthStart, nextMonthStart } = monthRange(req.query.month);
   const currentPeriod = currentShanghaiPeriod();
+  const source = leasedLineSource(req.query);
   const addedPlaceholders = addedStatuses.map(() => '?').join(', ');
   const cancelledPlaceholders = cancelledStatuses.map(() => '?').join(', ');
 
-  const total = db.prepare('SELECT COUNT(*) AS count FROM leased_line').get().count;
+  const total = db.prepare(`SELECT COUNT(*) AS count FROM ${source}`).get().count;
   const active = db.prepare(
-    `SELECT COUNT(*) AS count FROM leased_line
+    `SELECT COUNT(*) AS count FROM ${source}
      WHERE COALESCE(ledger_status, product_status_name, '') LIKE '%在用%'`
   ).get().count;
   const cancelled = db.prepare(
-    `SELECT COUNT(*) AS count FROM leased_line
+    `SELECT COUNT(*) AS count FROM ${source}
      WHERE COALESCE(ledger_status, product_status_name, '') LIKE '%销户%'`
   ).get().count;
   const addedInMonth = db.prepare(
-    `SELECT COUNT(*) AS count FROM leased_line
+    `SELECT COUNT(*) AS count FROM ${source}
      WHERE start_time >= ? AND start_time < ?
        AND COALESCE(product_status_name, ledger_status, '') IN (${addedPlaceholders})`
   ).get(monthStart, nextMonthStart, ...addedStatuses).count;
   const cancelledInMonth = db.prepare(
-    `SELECT COUNT(*) AS count FROM leased_line
+    `SELECT COUNT(*) AS count FROM ${source}
      WHERE status_time >= ? AND status_time < ?
        AND COALESCE(product_status_name, ledger_status, '') IN (${cancelledPlaceholders})`
   ).get(monthStart, nextMonthStart, ...cancelledStatuses).count;
   const stoppedInMonth = db.prepare(
-    `SELECT COUNT(*) AS count FROM leased_line
+    `SELECT COUNT(*) AS count FROM ${source}
      WHERE status_time >= ? AND status_time < ?
        AND COALESCE(product_status_name, ledger_status, '') = ?`
   ).get(monthStart, nextMonthStart, stoppedStatus).count;
   const addedInCurrentYear = db.prepare(
-    `SELECT COUNT(*) AS count FROM leased_line
+    `SELECT COUNT(*) AS count FROM ${source}
      WHERE start_time >= ? AND start_time < ?
        AND COALESCE(product_status_name, ledger_status, '') IN (${addedPlaceholders})`
   ).get(currentPeriod.yearStart, currentPeriod.nextYearStart, ...addedStatuses).count;
   const cancelledInCurrentYear = db.prepare(
-    `SELECT COUNT(*) AS count FROM leased_line
+    `SELECT COUNT(*) AS count FROM ${source}
      WHERE status_time >= ? AND status_time < ?
        AND COALESCE(product_status_name, ledger_status, '') IN (${cancelledPlaceholders})`
   ).get(currentPeriod.yearStart, currentPeriod.nextYearStart, ...cancelledStatuses).count;
   const addedInCurrentQuarter = db.prepare(
-    `SELECT COUNT(*) AS count FROM leased_line
+    `SELECT COUNT(*) AS count FROM ${source}
      WHERE start_time >= ? AND start_time < ?
        AND COALESCE(product_status_name, ledger_status, '') IN (${addedPlaceholders})`
   ).get(currentPeriod.quarterStart, currentPeriod.nextQuarterStart, ...addedStatuses).count;
   const cancelledInCurrentQuarter = db.prepare(
-    `SELECT COUNT(*) AS count FROM leased_line
+    `SELECT COUNT(*) AS count FROM ${source}
      WHERE status_time >= ? AND status_time < ?
        AND COALESCE(product_status_name, ledger_status, '') IN (${cancelledPlaceholders})`
   ).get(currentPeriod.quarterStart, currentPeriod.nextQuarterStart, ...cancelledStatuses).count;
@@ -772,7 +812,7 @@ app.get('/api/stats', (req, res) => {
          ELSE 0
        END
      ), 0) AS amount
-     FROM leased_line
+     FROM ${source}
      WHERE COALESCE(product_status_name, ledger_status, '') IN (${addedPlaceholders})`
   ).get(normalStatus, stoppingStatus, stoppedStatus, monthStart, nextMonthStart, ...addedStatuses).amount;
   const expectedOneTimeBilling = db.prepare(
@@ -790,7 +830,7 @@ app.get('/api/stats', (req, res) => {
          ELSE 0
        END
      ), 0) AS amount
-     FROM leased_line
+     FROM ${source}
      WHERE COALESCE(product_status_name, ledger_status, '') IN (${addedPlaceholders})`
   ).get(
     monthStart,
@@ -805,12 +845,13 @@ app.get('/api/stats', (req, res) => {
 
   const byProduct = db.prepare(
     `SELECT COALESCE(product_name, '未填写') AS name, COUNT(*) AS count
-     FROM leased_line GROUP BY COALESCE(product_name, '未填写')
+     FROM ${source} GROUP BY COALESCE(product_name, '未填写')
      ORDER BY count DESC LIMIT 8`
   ).all();
 
   res.json({
     month,
+    kpiMode: isKpiMode(req.query),
     total,
     active,
     cancelled,

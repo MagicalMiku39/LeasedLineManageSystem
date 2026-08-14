@@ -213,6 +213,74 @@ header h1 {
   box-shadow: 0 6px 18px rgba(0, 0, 0, .08);
 }
 
+.kpi-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  margin: 0;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .72);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color .18s ease, background .18s ease, color .18s ease;
+}
+
+.kpi-mode-toggle.active {
+  border-color: rgba(0, 113, 227, .28);
+  background: rgba(0, 113, 227, .08);
+  color: var(--accent-ink);
+}
+
+.kpi-mode-toggle input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.kpi-toggle-track {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #c7c7cc;
+  transition: background .18s ease;
+}
+
+.kpi-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .24);
+  transition: transform .18s ease;
+}
+
+.kpi-mode-toggle.active .kpi-toggle-track {
+  background: var(--accent);
+}
+
+.kpi-mode-toggle.active .kpi-toggle-thumb {
+  transform: translateX(14px);
+}
+
+.kpi-mode-toggle:focus-within {
+  outline: 2px solid rgba(0, 113, 227, .35);
+  outline-offset: 2px;
+}
+
 .upload-button,
 .primary {
   border-color: var(--accent);

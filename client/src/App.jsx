@@ -760,6 +760,7 @@ function App() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [ledgerSort, setLedgerSort] = useState({ key: 'updated_at', direction: 'desc' });
+  const [kpiMode, setKpiMode] = useState(true);
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
   const [managerSelection, setManagerSelection] = useState([]);
   const [managerSort, setManagerSort] = useState('yearScaleNet');
@@ -783,18 +784,20 @@ function App() {
       page,
       pageSize: 20,
       sortBy: ledgerSort.key,
-      sortDirection: ledgerSort.direction
+      sortDirection: ledgerSort.direction,
+      kpiMode: kpiMode ? '1' : '0'
     });
     return params.toString();
-  }, [filters, page, ledgerSort]);
+  }, [filters, page, ledgerSort, kpiMode]);
 
   const filterQueryString = useMemo(() => {
     const params = filtersToSearchParams(filters, {
       sortBy: ledgerSort.key,
-      sortDirection: ledgerSort.direction
+      sortDirection: ledgerSort.direction,
+      kpiMode: kpiMode ? '1' : '0'
     });
     return params.toString();
-  }, [filters, ledgerSort]);
+  }, [filters, ledgerSort, kpiMode]);
 
   const activeColumns = tableColumns.filter((column) => visibleColumns.includes(column.key));
   const advancedFilterCount = [
@@ -842,7 +845,8 @@ function App() {
   }
 
   async function loadStats() {
-    const response = await fetch(`${apiBase}/stats?month=${month}`);
+    const params = new URLSearchParams({ month, kpiMode: kpiMode ? '1' : '0' });
+    const response = await fetch(`${apiBase}/stats?${params.toString()}`);
     setStats(await response.json());
   }
 
@@ -855,7 +859,11 @@ function App() {
     setManagerLoading(true);
     setManagerError('');
     try {
-      const params = new URLSearchParams({ month, sort: managerSort });
+      const params = new URLSearchParams({
+        month,
+        sort: managerSort,
+        kpiMode: kpiMode ? '1' : '0'
+      });
       if (managerSelection.length > 0) {
         params.set('managers', managerSelection.join('|'));
       }
@@ -891,7 +899,7 @@ function App() {
   useEffect(() => {
     if (!auth.user) return;
     loadStats();
-  }, [month, auth.user]);
+  }, [month, kpiMode, auth.user]);
 
   useEffect(() => {
     if (!filters.statFilter || !filters.statFilter.includes('InMonth')) return;
@@ -906,7 +914,7 @@ function App() {
   useEffect(() => {
     if (!auth.user || activeView !== 'managers') return;
     loadManagerPerformance();
-  }, [auth.user, activeView, month, managerSort, managerSelection]);
+  }, [auth.user, activeView, month, managerSort, managerSelection, kpiMode]);
 
   async function uploadExcel(event) {
     const file = event.target.files?.[0];
@@ -1003,6 +1011,21 @@ function App() {
               <History size={16} /> 导入记录
             </button>
           </div>
+          <label className={`kpi-mode-toggle${kpiMode ? ' active' : ''}`}>
+            <span>KPI统计模式</span>
+            <input
+              type="checkbox"
+              checked={kpiMode}
+              onChange={(event) => {
+                setKpiMode(event.target.checked);
+                setPage(1);
+                setSelectedIds([]);
+              }}
+            />
+            <span className="kpi-toggle-track" aria-hidden="true">
+              <span className="kpi-toggle-thumb" />
+            </span>
+          </label>
           <label className="upload-button">
             <Upload size={16} />
             {uploading ? '导入中' : '导入 Excel'}
