@@ -164,7 +164,16 @@ function ledgerOrderBy(query) {
 const normalStatus = '正常在用';
 const stoppingStatus = '停机执行中';
 const stoppedStatus = '停机';
-const addedStatuses = [normalStatus, stoppingStatus, stoppedStatus];
+const billableStatuses = [normalStatus, stoppingStatus, stoppedStatus];
+const addedStatuses = [
+  '欠费销户',
+  stoppedStatus,
+  stoppingStatus,
+  '销户(订单处理中)',
+  '销户（订单处理中）',
+  normalStatus,
+  '正式销户'
+];
 const cancelledStatuses = ['欠费销户', '正式销户', '销户(订单处理中)', '销户（订单处理中）'];
 const kpiProductNames = [
   '互联网专线',
@@ -756,6 +765,7 @@ app.get('/api/stats', (req, res) => {
   const source = leasedLineSource(req.query);
   const addedPlaceholders = addedStatuses.map(() => '?').join(', ');
   const cancelledPlaceholders = cancelledStatuses.map(() => '?').join(', ');
+  const billablePlaceholders = billableStatuses.map(() => '?').join(', ');
 
   const total = db.prepare(`SELECT COUNT(*) AS count FROM ${source}`).get().count;
   const active = db.prepare(
@@ -813,8 +823,8 @@ app.get('/api/stats', (req, res) => {
        END
      ), 0) AS amount
      FROM ${source}
-     WHERE COALESCE(product_status_name, ledger_status, '') IN (${addedPlaceholders})`
-  ).get(normalStatus, stoppingStatus, stoppedStatus, monthStart, nextMonthStart, ...addedStatuses).amount;
+     WHERE COALESCE(product_status_name, ledger_status, '') IN (${billablePlaceholders})`
+  ).get(normalStatus, stoppingStatus, stoppedStatus, monthStart, nextMonthStart, ...billableStatuses).amount;
   const expectedOneTimeBilling = db.prepare(
     `SELECT COALESCE(SUM(
        CASE
@@ -831,7 +841,7 @@ app.get('/api/stats', (req, res) => {
        END
      ), 0) AS amount
      FROM ${source}
-     WHERE COALESCE(product_status_name, ledger_status, '') IN (${addedPlaceholders})`
+     WHERE COALESCE(product_status_name, ledger_status, '') IN (${billablePlaceholders})`
   ).get(
     monthStart,
     nextMonthStart,
@@ -840,7 +850,7 @@ app.get('/api/stats', (req, res) => {
     stoppedStatus,
     monthStart,
     nextMonthStart,
-    ...addedStatuses
+    ...billableStatuses
   ).amount;
 
   const byProduct = db.prepare(
