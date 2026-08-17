@@ -7,9 +7,9 @@ import { schemaSql } from './schema.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..', '..');
 const dataDir = join(rootDir, 'data');
-const dbPath = join(dataDir, 'ledger.db');
+const dbPath = process.env.LEDGER_DB_PATH || join(dataDir, 'ledger.db');
 
-mkdirSync(dataDir, { recursive: true });
+mkdirSync(dirname(dbPath), { recursive: true });
 
 export const db = new DatabaseSync(dbPath);
 db.exec('PRAGMA journal_mode = WAL;');

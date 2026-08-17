@@ -7,6 +7,7 @@ import https from 'node:https';
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { db, nowIso } from './lib/db.js';
 import { editableFields } from './lib/field-map.js';
 import { importExcel } from './lib/import-excel.js';
@@ -70,7 +71,7 @@ app.post('/api/auth/logout', (req, res) => {
 
 app.use('/api', requireAuth);
 
-function numberOrNull(value) {
+export function numberOrNull(value) {
   if (value === undefined || value === null || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
@@ -147,7 +148,7 @@ const manualLedgerColumns = [
 
 const ledgerSortableColumns = new Set([...originalLedgerColumns, ...manualLedgerColumns]);
 
-function ledgerOrderBy(query) {
+export function ledgerOrderBy(query) {
   const sortBy = ledgerSortableColumns.has(query.sortBy) ? query.sortBy : 'updated_at';
   const direction = query.sortDirection === 'asc' ? 'ASC' : 'DESC';
   const expression = sortBy === 'ledger_status'
@@ -191,25 +192,30 @@ const kpiProductSqlList = kpiProductNames
   .map((name) => `'${name.replaceAll("'", "''")}'`)
   .join(', ');
 
-function isKpiMode(query) {
+export function isKpiMode(query) {
   return String(query.kpiMode ?? '1') !== '0';
 }
 
-function leasedLineSource(query) {
+export function leasedLineSource(query) {
   return isKpiMode(query)
     ? `(SELECT * FROM leased_line WHERE product_name IN (${kpiProductSqlList}))`
     : 'leased_line';
 }
 
-function monthRange(month) {
-  const normalized = String(month || new Date().toISOString().slice(0, 7)).slice(0, 7);
+export function monthRange(month) {
+  const candidate = String(month || '').slice(0, 7);
+  const normalized = /^\d{4}-(0[1-9]|1[0-2])$/.test(candidate)
+    ? candidate
+    : new Date().toISOString().slice(0, 7);
   const monthStart = `${normalized}-01`;
-  const nextMonth = new Date(`${monthStart}T00:00:00`);
-  nextMonth.setMonth(nextMonth.getMonth() + 1);
+  const year = Number(normalized.slice(0, 4));
+  const monthNumber = Number(normalized.slice(5, 7));
+  const nextYear = monthNumber === 12 ? year + 1 : year;
+  const nextMonthNumber = monthNumber === 12 ? 1 : monthNumber + 1;
   return {
     month: normalized,
     monthStart,
-    nextMonthStart: nextMonth.toISOString().slice(0, 10)
+    nextMonthStart: `${nextYear}-${String(nextMonthNumber).padStart(2, '0')}-01`
   };
 }
 
@@ -238,7 +244,7 @@ function currentShanghaiPeriod() {
   };
 }
 
-function periodFromMonth(month) {
+export function periodFromMonth(month) {
   const { month: normalized, monthStart, nextMonthStart } = monthRange(month);
   const year = Number(normalized.slice(0, 4));
   const currentMonth = Number(normalized.slice(5, 7));
@@ -262,22 +268,33 @@ function periodFromMonth(month) {
   };
 }
 
-function repairMojibake(value) {
+export function repairMojibake(value) {
   if (typeof value !== 'string' || !/[\u00c0-\u00ff]/.test(value)) return value;
-  const decoded = Buffer.from(value, 'latin1').toString('utf8');
+  const windows1252Bytes = new Map([
+    [0x20ac, 0x80], [0x201a, 0x82], [0x0192, 0x83], [0x201e, 0x84],
+    [0x2026, 0x85], [0x2020, 0x86], [0x2021, 0x87], [0x02c6, 0x88],
+    [0x2030, 0x89], [0x0160, 0x8a], [0x2039, 0x8b], [0x0152, 0x8c],
+    [0x017d, 0x8e], [0x2018, 0x91], [0x2019, 0x92], [0x201c, 0x93],
+    [0x201d, 0x94], [0x2022, 0x95], [0x2013, 0x96], [0x2014, 0x97],
+    [0x02dc, 0x98], [0x2122, 0x99], [0x0161, 0x9a], [0x203a, 0x9b],
+    [0x0153, 0x9c], [0x017e, 0x9e], [0x0178, 0x9f]
+  ]);
+  const bytes = [...value].map((char) => windows1252Bytes.get(char.codePointAt(0)) ?? char.charCodeAt(0));
+  if (bytes.some((byte) => byte > 0xff)) return value;
+  const decoded = Buffer.from(bytes).toString('utf8');
   return /[\u3400-\u9fff]/.test(decoded) ? decoded : value;
 }
 
-function normalizeUploadedFilename(filename) {
+export function normalizeUploadedFilename(filename) {
   return repairMojibake(String(filename || ''));
 }
 
-function parseMultiValue(value) {
+export function parseMultiValue(value) {
   if (!value) return [];
   return String(value).split('|').map((item) => item.trim()).filter(Boolean);
 }
 
-function buildLedgerWhere(query) {
+export function buildLedgerWhere(query) {
   const where = [];
   const params = [];
 
@@ -888,6 +905,7 @@ if (existsSync(distDir)) {
   });
 }
 
+export function startServer() {
 if (httpsEnabled) {
   const httpsOptions = httpsPfxFile
     ? { pfx: readFileSync(httpsPfxFile), passphrase: httpsPfxPassphrase }
@@ -908,8 +926,17 @@ if (httpsEnabled) {
       console.log(`HTTP redirect listening on http://${host}:${redirectPort}`);
     });
   }
+  return server;
 } else {
-  app.listen(port, host, () => {
+  return app.listen(port, host, () => {
     console.log(`HTTP server listening on http://${host}:${port}`);
   });
 }
+}
+
+export { app };
+
+const isMainModule = process.argv[1]
+  && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isMainModule) startServer();

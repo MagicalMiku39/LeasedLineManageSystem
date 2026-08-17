@@ -4,21 +4,21 @@ import { excelFieldMap, excelHeaders } from './field-map.js';
 
 const dbColumns = Object.values(excelFieldMap);
 
-function normalizeValue(value) {
+export function normalizeValue(value) {
   if (value === undefined || value === null) return null;
   if (value instanceof Date) return value.toISOString().slice(0, 19).replace('T', ' ');
   const text = String(value).trim();
   return text === '' ? null : text;
 }
 
-function normalizeAmount(value) {
+export function normalizeAmount(value) {
   const normalized = normalizeValue(value);
   if (normalized === null) return null;
   const number = Number(String(normalized).replace(/,/g, ''));
   return Number.isFinite(number) ? number : null;
 }
 
-function rowToRecord(row) {
+export function rowToRecord(row) {
   const record = {};
   for (const [header, column] of Object.entries(excelFieldMap)) {
     record[column] = normalizeValue(row[header]);
@@ -29,7 +29,7 @@ function rowToRecord(row) {
   return record;
 }
 
-function validateHeaders(headers) {
+export function validateHeaders(headers) {
   const missing = excelHeaders.filter((header) => !headers.includes(header));
   if (missing.length > 0) {
     throw new Error(`Excel 缺少必要字段：${missing.join('、')}`);

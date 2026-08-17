@@ -10,6 +10,8 @@
     "start": "node server/index.js",
     "start:prod": "node server/index.js",
     "build": "vite build",
+    "test": "node --test",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-include=server/**/*.js --test-coverage-include=client/src/utils.js --test-coverage-exclude=server/scripts/** --test-coverage-lines=90 --test-coverage-branches=75 --test-coverage-functions=90",
     "preview": "vite preview --host 127.0.0.1",
     "db:init": "node server/scripts/init-db.js"
   },
