@@ -582,6 +582,7 @@ th {
 }
 
 .sort-header {
+  cursor: grab;
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
@@ -599,6 +600,9 @@ th {
   line-height: inherit;
   text-align: left;
 }
+
+th.column-drop-before { box-shadow: inset 3px 0 var(--accent); }
+th.column-drop-after { box-shadow: inset -3px 0 var(--accent); }
 
 .sort-header:hover,
 .sort-header.active {

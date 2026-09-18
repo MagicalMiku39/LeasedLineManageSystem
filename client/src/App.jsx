@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   ArrowDownWideNarrow,
@@ -26,6 +26,8 @@ import { filtersToSearchParams, money, netClass, signedMoney, signedNumber } fro
 
 const apiBase = '/api';
 const visibleColumnsStorageKey = 'ledgerVisibleColumns:v2';
+const columnOrderStorageKey = 'ledgerColumnOrder:v1';
+const defaultManagers = ['张凯', '冯琼', '陈藻麟', '黄训琛', '徐文君', '王瑞迎', '罗艳君', '刘菲', '周明', '张龙', '张雅琦', '喻科', '石佩伶', '张瑾', '尹雪康', '宾琼', '王倩', '曾繁词'];
 
 const emptyFilters = {
   keyword: '',
@@ -656,7 +658,7 @@ function ManagerDashboard({
         <MultiSelectFilter
           label="选择客户经理"
           value={selectedManagers}
-          options={options.managers || []}
+          options={[...new Set([...defaultManagers, ...(options.managers || []), ...selectedManagers])]}
           onChange={setSelectedManagers}
         />
         <button onClick={() => setSelectedManagers([])}>清空选择</button>
@@ -729,7 +731,21 @@ function App() {
   const [ledgerSort, setLedgerSort] = useState({ key: 'updated_at', direction: 'desc' });
   const [kpiMode, setKpiMode] = useState(true);
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
-  const [managerSelection, setManagerSelection] = useState([]);
+  const [managerSelection, setManagerSelection] = useState(() => [...defaultManagers]);
+  const draggedColumn = useRef(null);
+  const suppressSortUntil = useRef(0);
+  const [columnDrop, setColumnDrop] = useState(null);
+  const [columnOrder, setColumnOrder] = useState(() => {
+    const keys = tableColumns.map((column) => column.key);
+    try {
+      const saved = JSON.parse(localStorage.getItem(columnOrderStorageKey));
+      return Array.isArray(saved)
+        ? [...new Set([...saved.filter((key) => keys.includes(key)), ...keys])]
+        : keys;
+    } catch {
+      return keys;
+    }
+  });
   const [managerSort, setManagerSort] = useState('yearScaleNet');
   const [managerPerformance, setManagerPerformance] = useState(null);
   const [managerLoading, setManagerLoading] = useState(false);
@@ -766,7 +782,26 @@ function App() {
     return params.toString();
   }, [filters, ledgerSort, kpiMode]);
 
-  const activeColumns = tableColumns.filter((column) => visibleColumns.includes(column.key));
+  const activeColumns = columnOrder
+    .filter((key) => visibleColumns.includes(key))
+    .map((key) => tableColumns.find((column) => column.key === key));
+
+  function dropColumn(event, target) {
+    event.preventDefault();
+    const source = draggedColumn.current;
+    if (source && source !== target) {
+      const bounds = event.currentTarget.getBoundingClientRect();
+      const after = event.clientX >= bounds.left + bounds.width / 2;
+      setColumnOrder((current) => {
+        const next = current.filter((key) => key !== source);
+        next.splice(next.indexOf(target) + (after ? 1 : 0), 0, source);
+        return next;
+      });
+    }
+    draggedColumn.current = null;
+    suppressSortUntil.current = Date.now() + 250;
+    setColumnDrop(null);
+  }
   const advancedFilterCount = [
     filters.groupCode,
     filters.groupProductCode,
@@ -857,6 +892,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem(visibleColumnsStorageKey, JSON.stringify(visibleColumns));
   }, [visibleColumns]);
+
+  useEffect(() => {
+    localStorage.setItem(columnOrderStorageKey, JSON.stringify(columnOrder));
+  }, [columnOrder]);
 
   useEffect(() => {
     if (!auth.user) return;
@@ -971,7 +1010,10 @@ function App() {
             <button className={activeView === 'ledger' ? 'active' : ''} onClick={() => setActiveView('ledger')}>
               <FileSpreadsheet size={16} /> 台账
             </button>
-            <button className={activeView === 'managers' ? 'active' : ''} onClick={() => setActiveView('managers')}>
+            <button className={activeView === 'managers' ? 'active' : ''} onClick={() => {
+              if (activeView !== 'managers') setManagerSelection([...defaultManagers]);
+              setActiveView('managers');
+            }}>
               <UsersRound size={16} /> 客户经理
             </button>
             <button className={activeView === 'imports' ? 'active' : ''} onClick={() => setActiveView('imports')}>
@@ -1164,11 +1206,36 @@ function App() {
                     const isSorted = ledgerSort.key === column.key;
                     const directionLabel = isSorted && ledgerSort.direction === 'asc' ? '升序' : '降序';
                     return (
-                      <th key={column.key} aria-sort={isSorted ? (ledgerSort.direction === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                      <th
+                        key={column.key}
+                        draggable
+                        className={columnDrop?.key === column.key ? `column-drop-${columnDrop.side}` : ''}
+                        onDragStart={(event) => {
+                          draggedColumn.current = column.key;
+                          event.dataTransfer.effectAllowed = 'move';
+                          event.dataTransfer.setData('text/plain', column.key);
+                        }}
+                        onDragOver={(event) => {
+                          if (!draggedColumn.current) return;
+                          event.preventDefault();
+                          event.dataTransfer.dropEffect = 'move';
+                          const bounds = event.currentTarget.getBoundingClientRect();
+                          setColumnDrop({ key: column.key, side: event.clientX < bounds.left + bounds.width / 2 ? 'before' : 'after' });
+                        }}
+                        onDrop={(event) => dropColumn(event, column.key)}
+                        onDragEnd={() => {
+                          draggedColumn.current = null;
+                          suppressSortUntil.current = Date.now() + 250;
+                          setColumnDrop(null);
+                        }}
+                        aria-sort={isSorted ? (ledgerSort.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+                      >
                         <button
                           type="button"
                           className={`sort-header${isSorted ? ' active' : ''}`}
-                          onClick={() => toggleLedgerSort(column.key)}
+                          onClick={() => {
+                            if (Date.now() >= suppressSortUntil.current) toggleLedgerSort(column.key);
+                          }}
                           title={`按${column.label}${isSorted ? directionLabel : '排序'}`}
                         >
                           <span>{column.label}</span>
