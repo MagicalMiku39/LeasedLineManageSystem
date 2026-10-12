@@ -11,6 +11,7 @@ import { pathToFileURL } from 'node:url';
 import { db, nowIso } from './lib/db.js';
 import { editableFields } from './lib/field-map.js';
 import { importExcel } from './lib/import-excel.js';
+import { createRevenueRouter } from './lib/revenue.js';
 import {
   authStatus,
   currentUser,
@@ -897,6 +898,8 @@ app.get('/api/stats', (req, res) => {
     byProduct
   });
 });
+
+app.use('/api/revenue', createRevenueRouter({ db, uploadDir, leasedLineSource }));
 
 if (existsSync(distDir)) {
   app.use(express.static(distDir));

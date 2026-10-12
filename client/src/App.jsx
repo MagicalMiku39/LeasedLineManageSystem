@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import {
   ArrowDownWideNarrow,
   BarChart3,
+  Building2,
   CheckSquare,
   Columns3,
   Download,
@@ -22,12 +23,13 @@ import {
 } from 'lucide-react';
 import './styles.css';
 import './apple-ui.css';
+import GroupRevenue from './GroupRevenue.jsx';
 import { filtersToSearchParams, money, netClass, signedMoney, signedNumber } from './utils.js';
 
 const apiBase = '/api';
 const visibleColumnsStorageKey = 'ledgerVisibleColumns:v2';
 const columnOrderStorageKey = 'ledgerColumnOrder:v1';
-const defaultManagers = ['张凯', '冯琼', '陈藻麟', '黄训琛', '徐文君', '王瑞迎', '罗艳君', '刘菲', '周明', '张龙', '张雅琦', '喻科', '石佩伶', '张瑾', '尹雪康', '宾琼', '王倩', '曾繁词'];
+const defaultManagers = ['张凯', '冯琼', '陈藻麟', '黄训琛', '徐文君', '王瑞迎', '罗艳君', '刘菲', '周明', '张龙', '张雅琦', '喻科', '石佩灵', '张瑾', '尹雪康', '宾琼', '王倩', '曾繁词'];
 
 const emptyFilters = {
   keyword: '',
@@ -753,6 +755,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [selected, setSelected] = useState(null);
+  const [revenueRevision, setRevenueRevision] = useState(0);
   const [selectedIds, setSelectedIds] = useState([]);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showColumns, setShowColumns] = useState(false);
@@ -1003,7 +1006,7 @@ function App() {
       <header>
         <div>
           <p>专线台账管理系统</p>
-          <h1>台账工作台</h1>
+          <h1>{activeView === 'revenue' ? '集团收入' : '台账工作台'}</h1>
         </div>
         <div className="header-actions">
           <div className="view-tabs">
@@ -1015,6 +1018,9 @@ function App() {
               setActiveView('managers');
             }}>
               <UsersRound size={16} /> 客户经理
+            </button>
+            <button className={activeView === 'revenue' ? 'active' : ''} onClick={() => setActiveView('revenue')}>
+              <Building2 size={16} /> 集团收入
             </button>
             <button className={activeView === 'imports' ? 'active' : ''} onClick={() => setActiveView('imports')}>
               <History size={16} /> 导入记录
@@ -1035,24 +1041,28 @@ function App() {
               <span className="kpi-toggle-thumb" />
             </span>
           </label>
-          <label className="upload-button">
-            <Upload size={16} />
-            {uploading ? '导入中' : '导入 Excel'}
-            <input type="file" accept=".xlsx,.xls" onChange={uploadExcel} disabled={uploading} />
-          </label>
-          <button onClick={exportLedger}>
-            <Download size={16} /> 导出
-          </button>
-          <button onClick={() => { loadLedger(); loadStats(); loadOptions(); if (activeView === 'managers') loadManagerPerformance(); }}>
-            <RefreshCw size={16} /> 刷新
-          </button>
+          {activeView !== 'revenue' && (
+            <>
+              <label className="upload-button">
+                <Upload size={16} />
+                {uploading ? '导入中' : '导入 Excel'}
+                <input type="file" accept=".xlsx,.xls" onChange={uploadExcel} disabled={uploading} />
+              </label>
+              <button onClick={exportLedger}>
+                <Download size={16} /> 导出
+              </button>
+              <button onClick={() => { loadLedger(); loadStats(); loadOptions(); if (activeView === 'managers') loadManagerPerformance(); }}>
+                <RefreshCw size={16} /> 刷新
+              </button>
+            </>
+          )}
           <button onClick={logout}>
             <LogOut size={16} /> 退出
           </button>
         </div>
       </header>
 
-      {activeView === 'imports' ? <ImportRecords /> : activeView === 'managers' ? (
+      {activeView === 'revenue' ? <GroupRevenue kpiMode={kpiMode} defaultManagers={defaultManagers} refreshToken={revenueRevision} onOpenLine={(row) => openDetail(row.id)} /> : activeView === 'imports' ? <ImportRecords /> : activeView === 'managers' ? (
         <ManagerDashboard
           month={month}
           setMonth={setMonth}
@@ -1288,6 +1298,7 @@ function App() {
         onClose={() => setSelected(null)}
         onSaved={(record) => {
           setSelected(record);
+          setRevenueRevision((value) => value + 1);
           loadLedger();
           loadStats();
         }}

@@ -17,6 +17,8 @@ skills-lock.json
 *.log
 *.tmp
 *.temp
+output/playwright/
+.playwright-cli/
 
 # OS/editor noise
 .DS_Store
