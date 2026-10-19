@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, ArrowUpDown, Building2, ChevronLeft, ChevronRight, FileSpreadsheet, History, Plus, RefreshCw, Save, Search, Settings2, Trash2, Upload, UsersRound, X, Pencil, CircleAlert } from 'lucide-react';
 import './revenue.css';
 
@@ -23,7 +23,7 @@ function useResource(path, revision) {
   useEffect(() => {
     if (path == null) { setState({ loading: false, data: null, error: '' }); return; }
     const controller = new AbortController();
-    setState({ loading: true, data: null, error: '' });
+    setState((current) => ({ ...current, loading: true, error: '' }));
     request(path, { signal: controller.signal }).then((data) => {
       if (!controller.signal.aborted) setState({ loading: false, data, error: '' });
     }).catch((error) => {
@@ -221,15 +221,15 @@ function GroupDetail({ data, month, onOpenLine, onRefresh }) {
   </>;
 }
 
-export default function GroupRevenue({ kpiMode, defaultManagers, onOpenLine, refreshToken }) {
+export default function GroupRevenue({ ref, onExportReady, kpiMode, defaultManagers, onOpenLine, refreshToken }) {
   const [revision, setRevision] = useState(0), [month, setMonth] = useState(''), [selected, setSelected] = useState(null);
   const [view, setView] = useState('managers'), [manager, setManager] = useState(null), [group, setGroup] = useState(null);
   const [keyword, setKeyword] = useState(''), [filter, setFilter] = useState('all'), [importing, setImporting] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false), [tolerance, setTolerance] = useState('0.01'), [settingBusy, setSettingBusy] = useState(false), [message, setMessage] = useState(''), [error, setError] = useState('');
   const defaultsApplied = useRef(false);
   const refresh = () => setRevision((value) => value + 1);
-  const meta = useResource('/meta', revision);
-  const settings = useResource('/settings', revision);
+  const meta = useResource('/meta', `${revision}:${refreshToken}`);
+  const settings = useResource('/settings', `${revision}:${refreshToken}`);
   const managers = useMemo(() => [...new Map((meta.data?.managers || []).map((item) => [item.id, item])).values()], [meta.data]);
   useEffect(() => {
     if (!meta.data) return;
@@ -265,9 +265,46 @@ export default function GroupRevenue({ kpiMode, defaultManagers, onOpenLine, ref
   ];
   const loading = meta.loading || (group ? detail.loading : summary.loading);
   const failure = meta.error || (group ? detail.error : summary.error);
+  const exportRows = group ? detail.data?.products : view === 'history' ? meta.data?.batches : view === 'groups' ? groups : data?.managers;
+  const exportReady = !loading && !failure && Boolean(exportRows?.length);
+  useEffect(() => { onExportReady?.(exportReady); }, [exportReady, onExportReady]);
+  useImperativeHandle(ref, () => ({
+    refresh,
+    openImport: () => setImporting(true),
+    exportData: async () => {
+      if (!exportReady) return;
+      setError('');
+      try {
+        const XLSX = await import('xlsx');
+        const incomeFields = [['totalRevenue', '集团信息化收入'], ['lineRevenue', '报表专线收入'], ['lineShare', '专线占比'], ['previousRevenue', '上月收入'], ['change', '变化金额'], ['changeRate', '环比']];
+        const fields = group
+          ? [['productId', '产品编码'], ['productName', '产品名称'], ['category', '收入分类'], ['revenue', '本月收入'], ...incomeFields.slice(3)]
+          : view === 'history'
+            ? [['fileName', '文件名称'], ['months', '收入月份'], ['rowCount', '明细行数'], ['status', '批次状态'], ['activeMonths', '当前有效月份'], ['createdBy', '操作人'], ['createdAt', '导入时间']]
+            : view === 'groups'
+              ? [['groupCode', '集团编码'], ['groupName', '集团名称'], ['managerName', '客户经理'], ...incomeFields, ['supplementRevenue', '人工补录收入'], ['currentLineCount', '当前在用台账数']]
+              : [['id', '客户经理工号'], ['name', '客户经理'], ['groupCount', '集团数'], ...incomeFields];
+        const rows = exportRows.map((row) => Object.fromEntries(fields.map(([key, label]) => [label, row[key] ?? null])));
+        const book = XLSX.utils.book_new();
+        const sheet = XLSX.utils.json_to_sheet(rows);
+        fields.forEach(([key], column) => {
+          const format = ['lineShare', 'changeRate'].includes(key) ? '0.00%'
+            : ['totalRevenue', 'lineRevenue', 'supplementRevenue', 'previousRevenue', 'revenue', 'change'].includes(key) ? '#,##0.00' : null;
+          if (!format) return;
+          rows.forEach((_, index) => {
+            const cell = sheet[XLSX.utils.encode_cell({ r: index + 1, c: column })];
+            if (cell?.t === 'n') cell.z = format;
+          });
+        });
+        sheet['!cols'] = fields.map(() => ({ wch: 22 }));
+        XLSX.utils.book_append_sheet(book, sheet, '收入明细');
+        XLSX.writeFile(book, `集团收入-${month}-${group ? '产品' : view === 'groups' ? '集团' : view === 'history' ? '导入记录' : '客户经理'}.xlsx`);
+      } catch (failure) { setError(failure.message || '收入导出失败，请重试'); }
+    }
+  }));
   return <main className="revenue-page">
     <div className="rev-toolbar"><div className="rev-breadcrumbs"><button onClick={() => { setGroup(null); setManager(null); setView('managers'); }}>收入总览</button>{(manager !== null || group) && <><ChevronRight size={14} /><button onClick={() => { setGroup(null); setView('groups'); }}>{managers.find((item) => item.id === manager)?.name || '集团列表'}</button></>}{group && <><ChevronRight size={14} /><span>集团详情</span></>}</div>
-      <div className="rev-toolbar-actions"><label className="rev-month">收入月份<select aria-label="收入月份" disabled={!meta.data?.months.length} value={month} onChange={(event) => { setMonth(event.target.value); setMessage(''); }}><option value="" disabled>暂无收入月份</option>{meta.data?.months.map((item) => <option key={item}>{item}</option>)}</select></label><button title="刷新收入" aria-label="刷新收入" onClick={refresh}><RefreshCw size={16} /></button><button title="核对设置" aria-label="核对设置" onClick={() => setSettingsOpen(!settingsOpen)}><Settings2 size={16} /></button><button className="primary" onClick={() => setImporting(!importing)}><Upload size={16} />导入收入报表</button></div>
+      <div className="rev-toolbar-actions"><label className="rev-month">收入月份<select aria-label="收入月份" disabled={!meta.data?.months.length} value={month} onChange={(event) => { setMonth(event.target.value); setMessage(''); }}><option value="" disabled>暂无收入月份</option>{meta.data?.months.map((item) => <option key={item}>{item}</option>)}</select></label><button title="核对设置" aria-label="核对设置" onClick={() => setSettingsOpen(!settingsOpen)}><Settings2 size={16} /></button></div>
     </div>
     <div className="rev-context"><span>信息化收入 · 原表金额单位</span><span>台账范围：{kpiMode ? 'KPI 十类产品' : '全部产品'} · 报表收入：全部产品</span></div>
     {message && <div className="rev-success" role="status">{message}<button title="关闭提示" aria-label="关闭提示" onClick={() => setMessage('')}><X size={14} /></button></div>}

@@ -756,6 +756,8 @@ function App() {
   const [uploading, setUploading] = useState(false);
   const [selected, setSelected] = useState(null);
   const [revenueRevision, setRevenueRevision] = useState(0);
+  const revenueActions = useRef(null);
+  const [revenueExportReady, setRevenueExportReady] = useState(false);
   const [selectedIds, setSelectedIds] = useState([]);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showColumns, setShowColumns] = useState(false);
@@ -1006,7 +1008,7 @@ function App() {
       <header>
         <div>
           <p>专线台账管理系统</p>
-          <h1>{activeView === 'revenue' ? '集团收入' : '台账工作台'}</h1>
+          <h1>台账工作台</h1>
         </div>
         <div className="header-actions">
           <div className="view-tabs">
@@ -1041,28 +1043,33 @@ function App() {
               <span className="kpi-toggle-thumb" />
             </span>
           </label>
-          {activeView !== 'revenue' && (
-            <>
-              <label className="upload-button">
-                <Upload size={16} />
-                {uploading ? '导入中' : '导入 Excel'}
-                <input type="file" accept=".xlsx,.xls" onChange={uploadExcel} disabled={uploading} />
-              </label>
-              <button onClick={exportLedger}>
-                <Download size={16} /> 导出
-              </button>
-              <button onClick={() => { loadLedger(); loadStats(); loadOptions(); if (activeView === 'managers') loadManagerPerformance(); }}>
-                <RefreshCw size={16} /> 刷新
-              </button>
-            </>
+          {activeView === 'revenue' ? (
+            <button className="upload-button" title="导入收入报表" onClick={() => revenueActions.current?.openImport()}>
+              <Upload size={16} /> 导入 Excel
+            </button>
+          ) : (
+            <label className="upload-button">
+              <Upload size={16} />
+              {uploading ? '导入中' : '导入 Excel'}
+              <input type="file" accept=".xlsx,.xls" onChange={uploadExcel} disabled={uploading} />
+            </label>
           )}
+          <button disabled={activeView === 'revenue' && !revenueExportReady} title={activeView === 'revenue' ? '导出当前收入视图' : '导出台账'} onClick={() => activeView === 'revenue' ? revenueActions.current?.exportData() : exportLedger()}>
+            <Download size={16} /> 导出
+          </button>
+          <button onClick={() => {
+            if (activeView === 'revenue') { revenueActions.current?.refresh(); return; }
+            loadLedger(); loadStats(); loadOptions(); if (activeView === 'managers') loadManagerPerformance();
+          }}>
+            <RefreshCw size={16} /> 刷新
+          </button>
           <button onClick={logout}>
             <LogOut size={16} /> 退出
           </button>
         </div>
       </header>
 
-      {activeView === 'revenue' ? <GroupRevenue kpiMode={kpiMode} defaultManagers={defaultManagers} refreshToken={revenueRevision} onOpenLine={(row) => openDetail(row.id)} /> : activeView === 'imports' ? <ImportRecords /> : activeView === 'managers' ? (
+      {activeView === 'revenue' ? <GroupRevenue ref={revenueActions} onExportReady={setRevenueExportReady} kpiMode={kpiMode} defaultManagers={defaultManagers} refreshToken={revenueRevision} onOpenLine={(row) => openDetail(row.id)} /> : activeView === 'imports' ? <ImportRecords /> : activeView === 'managers' ? (
         <ManagerDashboard
           month={month}
           setMonth={setMonth}
