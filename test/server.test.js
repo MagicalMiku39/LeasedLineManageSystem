@@ -259,6 +259,147 @@ test('protected ledger APIs cover list, edit, batch, stats, performance and expo
   assert.equal(exportedRows[0]['集团名称'], 'Beta');
 });
 
+test('warning day boundaries, KPI scope, authentication and persistent marks', async () => {
+  const { stoppedDays, warningLevel } = await import('../server/lib/warnings.js');
+  assert.equal(stoppedDays('2026-10-22 23:59:59', '2026-10-23'), 1);
+  assert.equal(stoppedDays('2026-10-23 00:00:00', '2026-10-23'), 0);
+  assert.equal(stoppedDays('2025-12-31', '2026-01-01'), 1);
+  assert.equal(stoppedDays('2024-02-28', '2024-03-01'), 2);
+  assert.equal(stoppedDays('2026-02-29', '2026-10-23'), null);
+  assert.equal(stoppedDays('', '2026-10-23'), null);
+  assert.equal(stoppedDays('2026-10-24', '2026-10-23'), null);
+  assert.equal(stoppedDays('2026-10-22', 'invalid'), null);
+  for (const [days, level] of [[0, 'green'], [89, 'green'], [90, 'yellow'], [149, 'yellow'], [150, 'red'], [179, 'red'], [180, 'cancel'], [181, 'cancel']]) {
+    assert.equal(warningLevel(days), level);
+  }
+  const insert = db.prepare(`INSERT INTO leased_line(group_product_code, product_name, product_status_name, status_time, total_arrears)
+    VALUES (?, ?, ?, ?, ?)`);
+  const line = Number(insert.run('WARN-1', '互联网专线', '停机', '2026-10-22', 100).lastInsertRowid);
+  insert.run('WARN-2', 'IMS语音专线', '停机', '2025-12-31', 90);
+  insert.run('WARN-3', '互联网专线', '停机', '2026-10-23', 100);
+  insert.run('WARN-4', '互联网专线', '停机', '2026-02-01', 0);
+  insert.run('WARN-5', '互联网专线', '停机执行中', '2026-02-01', 100);
+  insert.run('WARN-6', '互联网专线', '停机', '', 100);
+  insert.run('WARN-7', '互联网专线', '停机', '2026-10-24', 100);
+  insert.run('WARN-8', '互联网专线', '停机', '2026-10-01', -1);
+  const boundaries = [89, 90, 149, 150, 179, 180, 181];
+  for (const days of boundaries) {
+    const start = new Date(Date.UTC(2026, 9, 23) - days * 86400000).toISOString().slice(0, 10);
+    insert.run(`WARN-DAY-${days}`, '互联网专线', '停机', start, 100);
+  }
+  assert.equal((await request('/api/warnings', {}, false)).status, 401);
+  assert.equal((await request(`/api/warnings/${line}`, { method: 'PATCH', body: { mark: 'ignore' } }, false)).status, 401);
+  const active = await (await request('/api/warnings?asOf=2026-10-23')).json();
+  assert.deepEqual(active.rows.map((row) => row.stopped_days), [181, 180, 179, 150, 149, 90, 89, 1, 0]);
+  assert.deepEqual(active.rows.map((row) => row.warning_level), ['cancel', 'cancel', 'red', 'red', 'yellow', 'yellow', 'green', 'green', 'green']);
+  assert.equal(active.asOf, '2026-10-23');
+  assert.equal(active.invalidDates, 2);
+  const all = await (await request('/api/warnings?asOf=2026-10-23&kpiMode=0')).json();
+  assert.equal(all.rows.length, active.rows.length + 1);
+  assert.equal(all.rows[0].product_name, 'IMS语音专线');
+  for (const mark of ['ignore', 'remind', 'unmarked']) {
+    assert.equal((await request(`/api/warnings/${line}`, { method: 'PATCH', body: { mark } })).status, 200);
+    db.prepare('UPDATE leased_line SET total_arrears = 200 WHERE id = ?').run(line);
+    const saved = await (await request('/api/warnings?asOf=2026-10-23')).json();
+    assert.equal(saved.rows.find((row) => row.id === line).mark, mark);
+  }
+  for (const asOf of ['2026-13-01', '2026-02-29', '2026-10', 'invalid', '']) {
+    assert.equal((await request(`/api/warnings?asOf=${asOf}`)).status, 400);
+  }
+  const defaultDate = await (await request('/api/warnings')).json();
+  assert.match(defaultDate.asOf, /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal((await request(`/api/warnings/${line}`, { method: 'PATCH', body: { mark: 'bad' } })).status, 400);
+  assert.equal((await request('/api/warnings/999999', { method: 'PATCH', body: { mark: 'ignore' } })).status, 404);
+  db.prepare("DELETE FROM leased_line WHERE group_product_code LIKE 'WARN-%'").run();
+});
+
+test('warning mail recipient mapping, preview validation, duplicate control and failed sends', async (t) => {
+  const { agentMail } = await import('../server/lib/agent-mail.js');
+  let copies = ['audit@example.com'];
+  t.mock.method(agentMail, 'defaultCc', () => copies);
+  t.mock.method(agentMail, 'status', async () => ({ available: true, loggedIn: true }));
+  let calls = 0;
+  const sentReports = [];
+  t.mock.method(agentMail, 'send', async (report) => { calls++; sentReports.push(report); return { queued: true }; });
+  const insert = db.prepare(`INSERT INTO leased_line(group_product_code, group_code, group_name, manager_name, manager_job_no,
+    product_name, product_status_name, status_time, total_arrears) VALUES (?, '00012', '测试集团', '同名经理', ?, '互联网专线', '停机', '2026-04-26', 100)`);
+  const line = Number(insert.run('MAIL-1', '00123').lastInsertRowid);
+  insert.run('MAIL-2', '00456');
+  const preview = () => request(`/api/warnings/${line}/reminder/preview`, { method: 'POST', body: { asOf: '2026-10-23', kpiMode: '1' } });
+  const send = (previewId) => request(`/api/warnings/${line}/reminder`, { method: 'POST', body: { previewId } });
+  const setContact = (email) => request('/api/warnings/mail/contacts', { method: 'PUT', body: { key: 'job:00123', email } });
+  assert.equal((await request('/api/warnings/mail/contacts', {}, false)).status, 401);
+  assert.equal((await preview()).status, 400);
+  assert.equal((await setContact('bad\n@example.com')).status, 400);
+  assert.equal((await setContact('a@example.com;b@example.com')).status, 400);
+  assert.equal((await request('/api/warnings/mail/contacts', { method: 'PUT', body: { key: 'job:missing', email: 'a@example.com' } })).status, 400);
+  assert.equal((await setContact('manager@example.com')).status, 200);
+  const contacts = await (await request('/api/warnings/mail/contacts')).json();
+  assert.equal(contacts.find((row) => row.key === 'job:00123').email, 'manager@example.com');
+  assert.equal(contacts.find((row) => row.key === 'job:00456').email, '');
+  assert.equal((await (await request('/api/warnings/mail/status')).json()).loggedIn, true);
+  const stale = await (await preview()).json();
+  assert.equal(stale.recipient, 'manager@example.com');
+  assert.match(stale.body, /停机时长：180 天/);
+  assert.match(stale.body, /按业务流程办理销户/);
+  await setContact('new@example.com');
+  assert.equal((await send(stale.id)).status, 409);
+  const expired = await (await preview()).json();
+  db.prepare("UPDATE warning_mail_delivery SET created_at='2000-01-01T00:00:00.000Z' WHERE id=?").run(expired.id);
+  assert.equal((await send(expired.id)).status, 409);
+  const otherActor = await (await preview()).json();
+  db.prepare("UPDATE warning_mail_delivery SET actor='another-user' WHERE id=?").run(otherActor.id);
+  assert.equal((await send(otherActor.id)).status, 400);
+  const changedLine = await (await preview()).json();
+  db.prepare('UPDATE leased_line SET total_arrears=101 WHERE id=?').run(line);
+  assert.equal((await send(changedLine.id)).status, 409);
+  const ready = await (await preview()).json();
+  assert.deepEqual(ready.cc, ['audit@example.com']);
+  copies = ['updated@example.com'];
+  assert.equal((await send(ready.id)).status, 409);
+  copies = ['audit@example.com'];
+  let completeSend;
+  let started;
+  const pendingStarted = new Promise((resolve) => { started = resolve; });
+  agentMail.send = async (report) => {
+    calls++; sentReports.push(report); started();
+    await new Promise((resolve) => { completeSend = resolve; });
+    return { queued: true };
+  };
+  const pending = send(ready.id);
+  await pendingStarted;
+  assert.equal((await send(ready.id)).status, 409);
+  completeSend();
+  assert.equal((await pending).status, 200);
+  assert.equal((await send(ready.id)).status, 200);
+  assert.equal(calls, 1);
+  assert.equal(sentReports[0].recipient, 'new@example.com');
+  assert.deepEqual(sentReports[0].cc, ['audit@example.com']);
+  assert.equal(db.prepare('SELECT mark FROM line_warning_mark WHERE line_id=?').get(line).mark, 'remind');
+  const duplicate = await (await preview()).json();
+  assert.equal((await send(duplicate.id)).status, 409);
+  assert.equal(calls, 1);
+  assert.equal((await (await request(`/api/warnings/${line}/mail-history`)).json()).some((row) => row.status === 'queued' && row.recipient === 'new@example.com'), true);
+  assert.equal(db.prepare('SELECT actor FROM warning_mail_delivery WHERE id=?').get(ready.id).actor, db.prepare('SELECT username FROM auth_user LIMIT 1').get().username);
+  db.prepare('DELETE FROM line_warning_mark WHERE line_id=?').run(line);
+  db.prepare('UPDATE leased_line SET total_arrears=201 WHERE id=?').run(line);
+  agentMail.send = async () => { throw Object.assign(new Error('授权失效'), { uncertain: false }); };
+  const failed = await (await preview()).json();
+  assert.equal((await send(failed.id)).status, 502);
+  assert.equal(db.prepare('SELECT status FROM warning_mail_delivery WHERE id=?').get(failed.id).status, 'failed');
+  assert.equal(db.prepare('SELECT mark FROM line_warning_mark WHERE line_id=?').get(line), undefined);
+  db.prepare('UPDATE leased_line SET total_arrears=202 WHERE id=?').run(line);
+  agentMail.send = async () => { throw Object.assign(new Error('网络超时'), { uncertain: true }); };
+  const uncertain = await (await preview()).json();
+  const result = await send(uncertain.id);
+  assert.equal(result.status, 502);
+  assert.equal((await result.json()).status, 'unknown');
+  assert.equal((await send(uncertain.id)).status, 409);
+  const retry = await (await preview()).json();
+  assert.equal((await send(retry.id)).status, 409);
+  db.prepare("DELETE FROM leased_line WHERE group_product_code LIKE 'MAIL-%'").run();
+});
+
 test('logout invalidates the session cookie', async () => {
   const response = await request('/api/auth/logout', { method: 'POST' });
   assert.equal(response.status, 200);

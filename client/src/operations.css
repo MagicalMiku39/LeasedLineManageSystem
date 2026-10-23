@@ -1,0 +1,56 @@
+.operations-page { min-width: 0; }
+.operations-heading { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 16px 0 28px; }
+.operations-eyebrow { color: #72767d; margin: 0 0 8px; font-size: 13px; }
+.operations-heading h2 { margin: 0; font-size: 28px; letter-spacing: 0; }
+.operations-rule { color: #737780; font-size: 13px; line-height: 1.6; }
+.operations-heading label, .operations-filters label { display: flex; align-items: center; gap: 12px; font-size: 13px; white-space: nowrap; }
+.operations-summary { display: grid; grid-template-columns: repeat(4, 1fr); border-block: 1px solid #e3e5e8; padding: 22px 0; gap: 20px; }
+.operations-summary span { display: block; color: #737780; font-size: 13px; margin-bottom: 8px; }
+.operations-summary strong { font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.operations-remind { color: #a04e12; }
+.operations-duration { font-weight: 600; font-variant-numeric: tabular-nums; }
+.operations-level-green { color: #137443; }
+.operations-level-yellow { color: #866000; }
+.operations-level-red { color: #bc2935; }
+.operations-level-cancel { color: #a11928; font-weight: 700; }
+.operations-risk { display: inline-block; border-radius: 4px; padding: 5px 8px; background: #edf7f0; }
+.operations-risk.operations-level-yellow { background: #fff5cf; }
+.operations-risk.operations-level-red { background: #ffeded; }
+.operations-risk.operations-level-cancel { background: #ffe1e5; border: 1px solid #e8a7af; }
+.operations-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 24px 0; }
+.operations-search { flex: 1; min-width: 230px; }
+.operations-search input { width: 100%; }
+.operations-filters > span { color: #737780; font-size: 13px; }
+.operations-table-wrap { overflow-x: auto; background: white; border-block: 1px solid #e3e5e8; }
+.operations-table-wrap table { width: 100%; border-collapse: collapse; white-space: nowrap; }
+.operations-table-wrap td, .operations-table-wrap th { padding: 16px 14px; font-size: 13px; }
+.operations-table-wrap button.operations-link { border: 0; background: none; padding: 0; color: #2563a5; box-shadow: none; }
+.operations-row-actions { display: flex; gap: 6px; min-width: 200px; }
+.operations-row-actions button { border-radius: 6px; padding: 6px 8px; font-size: 12px; }
+.operations-row-actions button[aria-pressed=true] { background: #edf4ff; border-color: #87aedd; color: #255ea4; }
+.operations-ignored { color: #747980; }
+.operations-error { color: #b42c35; }
+.warning-mail-settings { padding: 20px 0; border-block: 1px solid #e3e5e8; margin-bottom: 20px; }
+.warning-mail-title { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.warning-mail-title h3 { margin: 0; font-size: 18px; }
+.warning-mail-contact-form { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 16px; }
+.warning-mail-contact-form label { display: grid; gap: 8px; font-size: 13px; flex: 1; min-width: 220px; }
+.warning-mail-contact-form input, .warning-mail-contact-form select { width: 100%; }
+.warning-mail-dialog { width: min(720px, calc(100% - 32px)); max-height: calc(100dvh - 32px); border: 1px solid #dddfe4; border-radius: 8px; padding: 24px; color: #202126; background: #fff; }
+.warning-mail-dialog::backdrop { background: #17191f66; }
+.warning-mail-dialog dl { display: grid; grid-template-columns: 60px minmax(0, 1fr); gap: 12px; font-size: 13px; }
+.warning-mail-dialog dt { color: #6e737b; }
+.warning-mail-dialog dd { margin: 0; overflow-wrap: anywhere; }
+.warning-mail-body { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 13px; line-height: 1.8; background: #f6f7f9; padding: 16px; border-radius: 4px; max-height: 46dvh; overflow: auto; }
+.warning-mail-footer { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
+.warning-mail-history { font-size: 12px; color: #686d76; overflow-wrap: anywhere; }
+@media(max-width: 700px) {
+  .operations-heading { align-items: flex-start; flex-direction: column; }
+  .operations-summary { grid-template-columns: repeat(2, 1fr); }
+  .operations-filters label { width: 100%; flex-wrap: wrap; }
+  .operations-filters .operations-search { flex-wrap: nowrap; }
+  .operations-filters select { max-width: 100%; }
+  .operations-heading h2 { font-size: 24px; }
+  .warning-mail-dialog { padding: 16px; }
+  .warning-mail-contact-form label { min-width: 0; flex-basis: 100%; }
+}

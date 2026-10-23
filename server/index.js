@@ -12,6 +12,7 @@ import { db, nowIso } from './lib/db.js';
 import { editableFields } from './lib/field-map.js';
 import { importExcel } from './lib/import-excel.js';
 import { createRevenueRouter } from './lib/revenue.js';
+import { createWarningsRouter } from './lib/warnings.js';
 import {
   authStatus,
   currentUser,
@@ -900,6 +901,7 @@ app.get('/api/stats', (req, res) => {
 });
 
 app.use('/api/revenue', createRevenueRouter({ db, uploadDir, leasedLineSource }));
+app.use('/api/warnings', createWarningsRouter({ db, leasedLineSource, currentUser }));
 
 if (existsSync(distDir)) {
   app.use(express.static(distDir));

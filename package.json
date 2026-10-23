@@ -1,6 +1,6 @@
 {
   "name": "leased-line-ledger-system",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,9 +13,12 @@
     "test": "node --test",
     "test:coverage": "node --test --experimental-test-coverage --test-coverage-include=server/**/*.js --test-coverage-include=client/src/utils.js --test-coverage-exclude=server/scripts/** --test-coverage-lines=90 --test-coverage-branches=75 --test-coverage-functions=90",
     "preview": "vite preview --host 127.0.0.1",
-    "db:init": "node server/scripts/init-db.js"
+    "db:init": "node server/scripts/init-db.js",
+    "mail:login": "agently-cli auth login",
+    "mail:status": "agently-cli auth status"
   },
   "dependencies": {
+    "@tencent-qqmail/agently-cli": "1.0.18",
     "concurrently": "^10.0.3",
     "cors": "^2.8.6",
     "express": "^5.2.1",

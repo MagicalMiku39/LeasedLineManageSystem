@@ -136,3 +136,44 @@ uploads/
 这些是运行期数据，不会进入 Git。跨设备迁移时默认不复制数据库；需要数据时建议在新服务器重新导入 Excel。
 
 管理员账号、密码哈希、Google Authenticator 密钥和登录会话也保存在 `data/ledger.db` 中。因此不同服务器默认需要单独初始化管理员。
+
+## 10. Agent Mail 邮件授权与抄送
+
+同步代码后不能直接沿用 Windows 的邮箱授权。项目依赖包含腾讯官方 CLI，无需额外全局安装；需要在阿里云服务器上，以运行服务的同一用户及相同 HOME 环境完成一次 OAuth。
+
+先检查实际运行用户：
+
+```bash
+sudo systemctl show leased-line -p User --value
+```
+
+若输出为空，表示使用仓库默认模板，由 root 运行。此时使用 `sudo -i` 后执行下面命令。若设为专用用户，应通过 `sudo -iu 实际用户名` 切换，勿混用不同用户的授权。
+
+```bash
+cd /opt/leased-line-ledger-system
+npm ci
+npm run build
+npm run mail:login
+npm run mail:status
+```
+
+执行登录后，复制 CLI 输出的完整授权链接，在自己电脑的浏览器中打开并完成授权；服务器无需图形浏览器。确认 `logged_in` 为 `true`。若登录失败或超时，先核查命令报错，不要连续重试。
+
+使用同一服务用户编辑 `data/mail-settings.json`，示例仅展示格式，请替换为实际私有配置：
+
+```json
+{
+  "defaultCc": ["copy@example.com"]
+}
+```
+
+该文件在 Git 忽略目录中，需在新服务器单独配置；不要将本机 OAuth 凭据复制到服务器。设置文件权限后重启：
+
+```bash
+chmod 600 data/mail-settings.json
+sudo systemctl restart leased-line
+```
+
+若服务提示未授权而终端已授权，检查 service 的 `User`、`HOME` 和运行环境是否与授权时一致。可通过 `sudo systemctl edit leased-line` 显式设置正确的 HOME，例如默认 root 用户为 `[Service]` 下的 `Environment=HOME=/root`，修改后执行 `sudo systemctl daemon-reload` 并重启。服务器需要能联网访问腾讯授权及邮件接口。
+
+进入“运营中心 → 客户经理邮箱”重新配置客户经理收件邮箱（这些映射保存在本地数据库）。先预览，核对收件人及抄送后发送；“已提交发送”表示腾讯接受请求，实际投递情况以邮箱管理端为准。官方流程见 [Agent Mail CLI 接入文档](https://agent.qq.com/doc/cli-setup.md)。
