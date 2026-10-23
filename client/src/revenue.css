@@ -68,6 +68,11 @@
 .rev-trend-values strong { font-weight: 550; }
 .rev-trend-values span { color: #268368; font-size: 11px; }
 .rev-picker { position: relative; }
+.rev-manager-scope { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 12px 0; border-bottom: 1px solid #dedee3; font-size: 12px; color: #62626c; }
+.rev-manager-scope span { min-width: 0; overflow-wrap: anywhere; }
+.rev-scope-actions { display: flex; flex-wrap: wrap; gap: 8px; max-width: 100%; }
+.rev-scope-actions button { font-size: 12px; }
+.rev-scope-actions button[aria-pressed="true"] { color: #005eae; background: #eef4fb; border-color: #afc8e3; }
 .rev-picker summary { display: flex; align-items: center; gap: 8px; list-style: none; cursor: pointer; border: 1px solid #d7d7dc; background: white; border-radius: 6px; padding: 9px 12px; font-size: 12px; }
 .rev-picker summary::-webkit-details-marker { display: none; }
 .rev-picker-menu { position: absolute; right: 0; top: calc(100% + 6px); width: min(320px, 85vw); z-index: 8; background: #fff; border: 1px solid #d7d7dc; border-radius: 8px; box-shadow: 0 8px 24px #20203016; padding: 12px; }

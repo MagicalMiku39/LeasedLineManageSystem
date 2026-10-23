@@ -74,6 +74,24 @@ test('import preserves negative revenue, unknown categories, no-group repeated r
   assert.equal(repeated.duplicate, true); assert.throws(() => store.commit(repeated.id, { replace: true }, 'tester'), /已经导入/);
 });
 
+test('first income row outside default managers is imported and visible without manager scope', (t) => {
+  const { store, load } = context(t);
+  const preview = load([
+    fixture({ 集团编码: 'OUT001', 集团名称: '默认范围外集团', 集团客户经理ID: 'OUTSIDE', 集团客户经理: '其他经理', 计算后信息化收入: 321.09 }),
+    fixture()
+  ]);
+  assert.equal(preview.months[0].rowCount, 2);
+  const scoped = store.summary({ month: '2026-09', managers: 'M1' });
+  assert.equal(scoped.groups.some((row) => row.groupCode === 'OUT001'), false);
+  const all = store.summary({ month: '2026-09' });
+  assert.equal(all.groups.find((row) => row.groupCode === 'OUT001').lineRevenue, 321.09);
+  assert.equal(all.summary.totalRevenue, 421.09);
+  const first = store.detail('OUT001', { month: '2026-09' }).sourceRows[0];
+  assert.equal(first.rowNumber, 2);
+  assert.equal(first.productId, 'HLZX');
+  assert.equal(first.managerId, 'OUTSIDE');
+});
+
 test('revisions are atomic, preserve trace-only corrections, reject stale preview and retain old batches', (t) => {
   const { store, load, db } = context(t); load([fixture()]);
   const correction = store.preview(workbook([fixture({ 客户ID: 'C2' })]), '修订.xlsx', 'tester');

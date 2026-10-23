@@ -1,5 +1,5 @@
 import React, { useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, ArrowUpDown, Building2, ChevronLeft, ChevronRight, FileSpreadsheet, History, Plus, RefreshCw, Save, Search, Settings2, Trash2, Upload, UsersRound, X, Pencil, CircleAlert } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpDown, Building2, ChevronLeft, ChevronRight, FileSpreadsheet, History, ListChecks, Plus, RefreshCw, Save, Search, Settings2, Trash2, Upload, UsersRound, X, Pencil, CircleAlert } from 'lucide-react';
 import './revenue.css';
 
 const format = (value) => value == null ? '—' : Number(value).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -94,8 +94,9 @@ function Trend({ rows }) {
 
 function ManagerPicker({ options, selected, onChange }) {
   const [search, setSearch] = useState('');
-  return <details className="rev-picker"><summary><UsersRound size={16} />{selected.length ? `客户经理 · ${selected.length}` : '全部客户经理'}</summary><div className="rev-picker-menu">
-    <div className="rev-picker-tools"><input aria-label="搜索客户经理" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="姓名或工号" /><button onClick={() => onChange([])}>清空</button></div>
+  const count = options.filter((item) => selected.includes(item.id)).length;
+  return <details className="rev-picker"><summary><UsersRound size={16} />{selected.length ? count ? `客户经理 · ${count}` : '默认名单无匹配' : '全部客户经理'}</summary><div className="rev-picker-menu">
+    <div className="rev-picker-tools"><input aria-label="搜索客户经理" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="姓名或工号" /><button onClick={() => onChange([])}>查看全部</button></div>
     <div className="rev-picker-options">{options.filter((item) => `${item.name} ${item.id}`.includes(search)).map((item) => <label key={item.id}><input type="checkbox" checked={selected.includes(item.id)} onChange={(event) => onChange(event.target.checked ? [...selected, item.id] : selected.filter((id) => id !== item.id))} /><span>{item.name || '未填写'}<small>{item.id || '无工号'}</small></span></label>)}</div>
   </div></details>;
 }
@@ -231,14 +232,17 @@ export default function GroupRevenue({ ref, onExportReady, kpiMode, defaultManag
   const meta = useResource('/meta', `${revision}:${refreshToken}`);
   const settings = useResource('/settings', `${revision}:${refreshToken}`);
   const managers = useMemo(() => [...new Map((meta.data?.managers || []).map((item) => [item.id, item])).values()], [meta.data]);
+  const defaultManagerIds = useMemo(() => {
+    const ids = managers.filter((item) => defaultManagers.includes(item.name)).map((item) => item.id);
+    return ids.length ? ids : ['__default_managers_missing__'];
+  }, [managers, defaultManagers]);
   useEffect(() => {
     if (!meta.data) return;
     if (!month && meta.data.months.length) setMonth(meta.data.months[0]);
     if (!defaultsApplied.current && managers.length) {
-      const ids = managers.filter((item) => defaultManagers.includes(item.name)).map((item) => item.id);
-      setSelected(ids.length ? ids : ['__default_managers_missing__']); defaultsApplied.current = true;
+      setSelected(defaultManagerIds); defaultsApplied.current = true;
     }
-  }, [meta.data, month, managers, defaultManagers]);
+  }, [meta.data, month, managers, defaultManagerIds]);
   useEffect(() => { if (settings.data) setTolerance(String(settings.data.tolerance)); }, [settings.data]);
   const params = new URLSearchParams({ month, kpiMode: kpiMode ? '1' : '0' });
   if (view === 'groups' && manager !== null) params.set('managers', manager);
@@ -246,6 +250,8 @@ export default function GroupRevenue({ ref, onExportReady, kpiMode, defaultManag
   const summary = useResource(month && selected !== null && view !== 'history' && !group ? `/summary?${params}` : null, `${revision}:${refreshToken}`);
   const detail = useResource(group && month ? `/groups/${encodeURIComponent(group)}?month=${month}&kpiMode=${kpiMode ? '1' : '0'}` : null, `${revision}:${refreshToken}`);
   const data = summary.data;
+  const scopedManagerIds = view === 'groups' && manager !== null ? [manager] : selected || [];
+  const scopedManagers = managers.filter((item) => scopedManagerIds.includes(item.id));
   const groups = useMemo(() => (data?.groups || []).filter((row) => (manager === null || row.managerId === manager)
     && `${row.groupCode} ${row.groupName}`.includes(keyword.trim())
     && (filter !== 'decline' || row.change < 0) && (filter !== 'unmatched' || !row.matched)
@@ -310,10 +316,17 @@ export default function GroupRevenue({ ref, onExportReady, kpiMode, defaultManag
     {message && <div className="rev-success" role="status">{message}<button title="关闭提示" aria-label="关闭提示" onClick={() => setMessage('')}><X size={14} /></button></div>}
     {error && <Notice error>{error}</Notice>}
     {settingsOpen && <form className="rev-settings" onSubmit={saveSettings}><label>舍入容差（原表金额单位）<input type="number" step="0.01" min="0" required value={tolerance} onChange={(event) => setTolerance(event.target.value)} /></label><button className="primary" disabled={settingBusy}><Save size={16} />保存</button>{settings.error && <Notice error>{settings.error}</Notice>}</form>}
-    {importing && <ImportPanel onClose={() => setImporting(false)} onDone={(result) => { setImporting(false); setMessage(`导入完成：${result.months.join('、')}${result.invalidatedServices ? `，${result.invalidatedServices} 项延伸服务需复核` : ''}`); setMonth([...result.months].sort().at(-1)); setGroup(null); refresh(); }} />}
+    {importing && <ImportPanel onClose={() => setImporting(false)} onDone={(result) => { setImporting(false); setMessage(`导入完成：${result.months.join('、')}。报表明细已保存，展示范围以当前客户经理筛选为准。${result.invalidatedServices ? `${result.invalidatedServices} 项延伸服务需复核。` : ''}`); setMonth([...result.months].sort().at(-1)); setGroup(null); refresh(); }} />}
     {failure && <Notice error>{failure}<button onClick={refresh}><RefreshCw size={14} />重试</button></Notice>}
     {loading ? <Loader /> : !meta.data?.months.length ? <section className="rev-empty"><FileSpreadsheet size={42} strokeWidth={1.3} /><h2>暂无集团收入</h2><p>7、8、9 月报表导入后将在这里展示。</p></section> : group ? detail.data && <GroupDetail data={detail.data} month={month} onOpenLine={onOpenLine} onRefresh={refresh} /> : <>
       <div className="rev-view-controls"><div className="rev-segment" role="group" aria-label="收入视图"><button aria-pressed={view === 'managers'} onClick={() => { setView('managers'); setManager(null); }}><UsersRound size={16} />客户经理</button><button aria-pressed={view === 'groups'} onClick={() => { setView('groups'); setManager(null); }}><Building2 size={16} />集团</button><button aria-pressed={view === 'history'} onClick={() => setView('history')}><History size={16} />收入导入记录</button></div>{view !== 'history' && <ManagerPicker options={managers} selected={selected || []} onChange={(values) => { setSelected(values); setManager(null); }} />}</div>
+      {view !== 'history' && <div className="rev-manager-scope" role="status" aria-label="客户经理筛选范围">
+        <span>{scopedManagerIds.length ? scopedManagers.length ? `当前范围：${manager !== null ? scopedManagers[0].name : `已选 ${scopedManagers.length} 位客户经理`}，未选经理的集团未显示` : '当前范围：所选客户经理在收入报表中无匹配记录' : '当前范围：全部客户经理'}</span>
+        <div className="rev-scope-actions" role="group" aria-label="客户经理快捷筛选">
+          <button aria-pressed={scopedManagerIds.length === 0} onClick={() => { setSelected([]); setManager(null); }}><UsersRound size={15} />查看全部客户经理</button>
+          <button aria-pressed={scopedManagerIds.length === defaultManagerIds.length && defaultManagerIds.every((id) => scopedManagerIds.includes(id))} onClick={() => { setSelected(defaultManagerIds); setManager(null); }}><ListChecks size={15} />指定18位客户经理</button>
+        </div>
+      </div>}
       {view === 'history' ? <section className="rev-section"><DataTable rows={meta.data.batches} rowKey="id" initialSort="createdAt" columns={[
         { key: 'fileName', label: '文件名称' }, { key: 'months', label: '收入月份' }, { key: 'rowCount', label: '明细行数', numeric: true },
         { key: 'status', label: '状态', render: (row) => row.status === 'preview' ? '预览（未计入）' : row.activeMonths ? '已导入' : '历史版本' },
