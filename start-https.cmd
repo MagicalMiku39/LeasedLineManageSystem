@@ -11,5 +11,6 @@ set "HTTP_REDIRECT_PORT=3001"
 set "HTTPS_PFX_FILE=certs\server.pfx"
 set "HTTPS_PFX_PASSPHRASE=changeit"
 set "AUTH_COOKIE_SECURE=true"
-npm.cmd run build
+call npm.cmd run build
+if errorlevel 1 exit /b 1
 node server\index.js

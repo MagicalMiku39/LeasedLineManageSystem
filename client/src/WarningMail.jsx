@@ -76,7 +76,7 @@ export function WarningMailDialog({ row, asOf, kpiMode, onClose, onQueued, onCon
   }
   return <dialog ref={dialog} className="warning-mail-dialog" onCancel={(event) => { if (sending) event.preventDefault(); else onClose(); }} aria-labelledby="warning-mail-dialog-title">
     <div className="warning-mail-title"><h3 id="warning-mail-dialog-title">欠费预警报告</h3><button title="关闭报告" disabled={sending} onClick={onClose}><X size={18} /></button></div>
-    {preview ? <><dl><dt>收件人</dt><dd>{preview.manager} &lt;{preview.recipient}&gt;</dd><dt>抄送</dt><dd>{preview.cc?.join('；') || '-'}</dd><dt>主题</dt><dd>{preview.subject}</dd></dl><pre className="warning-mail-body">{preview.body}</pre></> : !error && <p>正在生成报告…</p>}
+    {preview ? <><dl><dt>收件人</dt><dd>{preview.manager} &lt;{preview.recipient}&gt;</dd><dt>抄送</dt><dd>{preview.cc?.join('；') || '—'}</dd><dt>主题</dt><dd>{preview.subject}</dd></dl><pre className="warning-mail-body">{preview.body}</pre></> : !error && <p>正在生成报告…</p>}
     {error && <p className="operations-error" role="alert">{error}</p>}
     {history.length > 0 && <details className="warning-mail-history"><summary>最近发送记录</summary>{history.map((item) => <p key={item.id}>{new Date(item.sent_at || item.created_at).toLocaleString('zh-CN')} · {statusLabels[item.status] || item.status} · {item.recipient}{item.error ? ` · ${item.error}` : ''}</p>)}</details>}
     {historyError && <p role="alert">{historyError}</p>}

@@ -1,13 +1,13 @@
 import React, { useEffect, useImperativeHandle, useMemo, useState } from 'react';
 import { Bell, BellOff, Mail, Search } from 'lucide-react';
 import { WarningMailDialog, WarningMailSettings } from './WarningMail.jsx';
-import { money } from './utils.js';
+import { beijingDate, money } from './utils.js';
 import './operations.css';
 
 const labels = { unmarked: '未标注', remind: '提醒', ignore: '忽略' };
 const levels = { green: '绿色 · 0–89 天', yellow: '黄色 · 90–149 天', red: '红色 · 150–179 天', cancel: '待销户 · ≥180 天' };
 export default function Operations({ ref, kpiMode, refreshToken, onOpenLine }) {
-  const [asOf, setAsOf] = useState(() => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()));
+  const [asOf, setAsOf] = useState(() => beijingDate());
   const [data, setData] = useState(null);
   const [keyword, setKeyword] = useState('');
   const [mark, setMark] = useState('active');
@@ -87,11 +87,11 @@ export default function Operations({ ref, kpiMode, refreshToken, onOpenLine }) {
     {notice && <p role="status">{notice}</p>}
     {error && <p role="alert" className="operations-error">{error}</p>}
     {!loading && data?.invalidDates > 0 && <p className="operations-rule">{data.invalidDates} 条欠费停机记录的状态时间缺失、无效或晚于统计日期，未纳入预警。</p>}
-    <div className="operations-table-wrap"><table><thead><tr>{['集团编码', '集团名称', '集团产品编码', '产品编码', '产品账户', '客户经理', '停机时间', '停机时长', '预警等级', '总欠费', '标注', '操作'].map((title) => <th key={title}>{title}</th>)}</tr></thead>
+    <div className="operations-table-wrap"><table><thead><tr>{['集团编码', '集团名称', '集团产品编码', '产品编码', '产品账户', '客户经理', '停机时间', '停机时长', '预警等级', '总欠费', '标注', '操作'].map((title) => <th key={title} className={title === '总欠费' ? 'num' : undefined}>{title}</th>)}</tr></thead>
       <tbody>{!loading && rows.map((row) => <tr key={row.id} className={row.mark === 'ignore' ? 'operations-ignored' : ''}>
-        <td>{row.group_code || '-'}</td><td><button className="operations-link" onClick={() => onOpenLine(row.id)}>{row.group_name || '查看专线'}</button></td>
-        <td>{row.group_product_code || '-'}</td><td>{row.product_code || '-'}</td><td>{row.group_product_account_id || '-'}</td><td>{row.manager_name || '-'}</td>
-        <td>{row.status_time?.slice(0, 10)}</td><td className={`operations-duration operations-level-${row.warning_level}`}>{row.stopped_days} 天</td><td><span className={`operations-risk operations-level-${row.warning_level}`}>{levels[row.warning_level]}</span></td><td>{money(row.total_arrears)}</td><td>{labels[row.mark]}</td>
+        <td>{row.group_code || '—'}</td><td><button className="operations-link" onClick={() => onOpenLine(row.id)}>{row.group_name || '查看专线'}</button></td>
+        <td>{row.group_product_code || '—'}</td><td>{row.product_code || '—'}</td><td>{row.group_product_account_id || '—'}</td><td>{row.manager_name || '—'}</td>
+        <td>{row.status_time ? row.status_time.slice(0, 10) : '—'}</td><td className={`operations-duration operations-level-${row.warning_level}`}>{row.stopped_days} 天</td><td><span className={`operations-risk operations-level-${row.warning_level}`}>{levels[row.warning_level]}</span></td><td className="num">{money(row.total_arrears)}</td><td>{labels[row.mark]}</td>
         <td><div className="operations-row-actions"><button title="发送欠费预警报告" aria-pressed={row.mark === 'remind'} disabled={saving !== null} onClick={() => { setNotice(''); setMailRow(row); }}><Bell size={15} />提醒</button><button title="忽略此条预警" aria-pressed={row.mark === 'ignore'} disabled={saving !== null} onClick={() => saveMark(row, 'ignore')}><BellOff size={15} />忽略</button>{row.mark !== 'unmarked' && <button disabled={saving !== null} onClick={() => saveMark(row, 'unmarked')}>重置</button>}</div></td>
       </tr>)}{(loading || !rows.length) && <tr><td colSpan="12" className="empty">{loading ? '正在加载预警…' : error ? '预警加载失败，请刷新重试' : '暂无符合条件的预警'}</td></tr>}</tbody>
     </table></div>

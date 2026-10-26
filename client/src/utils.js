@@ -20,6 +20,38 @@ export function netClass(value) {
   return 'net-zero';
 }
 
+export const emptyMark = '—';
+
+export function isBlank(value) {
+  return value === null || value === undefined || (typeof value === 'string' && value.trim() === '');
+}
+
+// Missing values read as a dash; a real zero is printed.
+export function displayValue(value) {
+  return isBlank(value) ? emptyMark : value;
+}
+
+// Amount cells: two decimals with separators. Text that is not a number is shown as entered.
+export function displayMoney(value) {
+  if (isBlank(value)) return emptyMark;
+  const number = Number(value);
+  return Number.isFinite(number) ? money(number) : String(value);
+}
+
+// Controlled inputs: keep 0, turn null or undefined into an empty field.
+export function inputValue(value) {
+  return value ?? '';
+}
+
+// Calendar date and month in Beijing time, the business day used across the system.
+export function beijingDate(date = new Date()) {
+  return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
+}
+
+export function beijingMonth(date = new Date()) {
+  return beijingDate(date).slice(0, 7);
+}
+
 export function filtersToSearchParams(filters, extra = {}) {
   const params = new URLSearchParams(extra);
   Object.entries(filters).forEach(([key, value]) => {

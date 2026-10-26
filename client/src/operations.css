@@ -1,11 +1,11 @@
 .operations-page { min-width: 0; }
 .operations-heading { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 16px 0 28px; }
-.operations-eyebrow { color: #72767d; margin: 0 0 8px; font-size: 13px; }
+.operations-eyebrow { color: #6e6e73; margin: 0 0 8px; font-size: 13px; }
 .operations-heading h2 { margin: 0; font-size: 28px; letter-spacing: 0; }
-.operations-rule { color: #737780; font-size: 13px; line-height: 1.6; }
+.operations-rule { color: #6e6e73; font-size: 13px; line-height: 1.6; }
 .operations-heading label, .operations-filters label { display: flex; align-items: center; gap: 12px; font-size: 13px; white-space: nowrap; }
 .operations-summary { display: grid; grid-template-columns: repeat(4, 1fr); border-block: 1px solid #e3e5e8; padding: 22px 0; gap: 20px; }
-.operations-summary span { display: block; color: #737780; font-size: 13px; margin-bottom: 8px; }
+.operations-summary span { display: block; color: #6e6e73; font-size: 13px; margin-bottom: 8px; }
 .operations-summary strong { font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .operations-remind { color: #a04e12; }
 .operations-duration { font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -20,7 +20,7 @@
 .operations-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 24px 0; }
 .operations-search { flex: 1; min-width: 230px; }
 .operations-search input { width: 100%; }
-.operations-filters > span { color: #737780; font-size: 13px; }
+.operations-filters > span { color: #6e6e73; font-size: 13px; }
 .operations-table-wrap { overflow-x: auto; background: white; border-block: 1px solid #e3e5e8; }
 .operations-table-wrap table { width: 100%; border-collapse: collapse; white-space: nowrap; }
 .operations-table-wrap td, .operations-table-wrap th { padding: 16px 14px; font-size: 13px; }
@@ -28,7 +28,7 @@
 .operations-row-actions { display: flex; gap: 6px; min-width: 200px; }
 .operations-row-actions button { border-radius: 6px; padding: 6px 8px; font-size: 12px; }
 .operations-row-actions button[aria-pressed=true] { background: #edf4ff; border-color: #87aedd; color: #255ea4; }
-.operations-ignored { color: #747980; }
+.operations-ignored { color: #6e6e73; }
 .operations-error { color: #b42c35; }
 .warning-mail-settings { padding: 20px 0; border-block: 1px solid #e3e5e8; margin-bottom: 20px; }
 .warning-mail-title { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
