@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A ledger sheet: header bar and three rows. 108dp canvas, art inside the 66dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M36,32h36a4,4 0,0 1,4 4v36a4,4 0,0 1,-4 4h-36a4,4 0,0 1,-4 -4v-36a4,4 0,0 1,4 -4z" />
+    <path
+        android:fillColor="#FF0071E3"
+        android:pathData="M38,38h32v7h-32z" />
+    <path
+        android:fillColor="#FFB9D7F5"
+        android:pathData="M38,49h32v4h-32zM38,57h32v4h-32zM38,65h22v4h-22z" />
+</vector>

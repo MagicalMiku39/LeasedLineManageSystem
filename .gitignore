@@ -25,3 +25,11 @@ output/playwright/
 Thumbs.db
 .vscode/
 .idea/
+
+# Android client build output and signing keys
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.jks
+*.keystore

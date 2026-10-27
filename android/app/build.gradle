@@ -1,0 +1,44 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Release signing comes from CI secrets (see android/README.md). Without them the
+// build falls back to the debug key so it still produces an installable APK.
+def keystorePath = System.getenv('ANDROID_KEYSTORE_FILE')
+def runNumber = (System.getenv('GITHUB_RUN_NUMBER') ?: '1') as Integer
+
+android {
+    namespace 'com.magicalmiku39.leasedline'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.magicalmiku39.leasedline'
+        minSdk 24
+        targetSdk 35
+        versionCode runNumber
+        versionName "1.0.${runNumber}"
+    }
+
+    signingConfigs {
+        release {
+            if (keystorePath) {
+                storeFile file(keystorePath)
+                storePassword System.getenv('ANDROID_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('ANDROID_KEY_ALIAS')
+                keyPassword System.getenv('ANDROID_KEY_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig keystorePath ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
