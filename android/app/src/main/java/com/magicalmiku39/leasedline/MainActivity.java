@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Insets;
@@ -88,13 +89,72 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        CrashLog.install(this);
         config = new ServerConfig(this);
         root = new FrameLayout(this);
         root.setBackgroundColor(0xFFF5F5F7);
         drawEdgeToEdge();
         setContentView(root);
+        String crash = CrashLog.pending(this);
+        if (crash != null) showCrashReport(crash);
+        else showStart();
+    }
+
+    private void showStart() {
         if (config.isReady()) showWeb();
         else showSetup(config.url(), null);
+    }
+
+    /** Shown once after a crash, before anything that might crash again, so the trace can be copied. */
+    private void showCrashReport(String report) {
+        root.removeAllViews();
+        LinearLayout column = new LinearLayout(this);
+        column.setOrientation(LinearLayout.VERTICAL);
+        column.setPadding(dp(24), dp(40), dp(24), dp(24));
+
+        TextView title = new TextView(this);
+        title.setText("上次运行异常退出");
+        title.setTextColor(0xFF111114);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        column.addView(title);
+
+        TextView hint = new TextView(this);
+        hint.setText("请点“复制”，把下面的内容发给开发者排查。内容只包含错误信息和手机型号，不含账号或业务数据。");
+        hint.setTextColor(0xFF6E6E73);
+        hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        hint.setPadding(0, dp(8), 0, dp(12));
+        column.addView(hint);
+
+        TextView detail = new TextView(this);
+        detail.setText(report);
+        detail.setTextIsSelectable(true);
+        detail.setTextColor(0xFF3A3A3C);
+        detail.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        detail.setTypeface(Typeface.MONOSPACE);
+        column.addView(detail);
+
+        Button copy = new Button(this);
+        copy.setText("复制");
+        copy.setOnClickListener(v -> {
+            ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (clipboard != null) clipboard.setPrimaryClip(ClipData.newPlainText("崩溃信息", report));
+            toast("已复制");
+        });
+        column.addView(copy);
+
+        Button proceed = new Button(this);
+        proceed.setText("继续");
+        proceed.setOnClickListener(v -> {
+            CrashLog.clear(this);
+            showStart();
+        });
+        column.addView(proceed);
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.addView(column);
+        root.addView(scroll);
     }
 
     // ---------- window ----------
@@ -150,7 +210,7 @@ public class MainActivity extends Activity {
         column.addView(title);
 
         TextView hint = new TextView(this);
-        hint.setText("输入服务器的 HTTPS 地址，例如 https://192.168.1.20:3443。首次连接需要核对服务器证书指纹。");
+        hint.setText("输入服务器的 HTTPS 地址，域名或 IP 均可，例如 https://ledger.example.com 或 https://192.168.1.20:3443。不写端口时默认 443。首次连接需要核对服务器证书指纹。");
         hint.setTextColor(0xFF6E6E73);
         hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         hint.setPadding(0, dp(8), 0, dp(20));
@@ -166,7 +226,7 @@ public class MainActivity extends Activity {
         address.setSingleLine(true);
         address.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         address.setImeOptions(EditorInfo.IME_ACTION_GO);
-        address.setHint("https://服务器地址:3443");
+        address.setHint("https://域名或IP:端口");
         if (presetUrl != null) address.setText(presetUrl);
         column.addView(address, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
