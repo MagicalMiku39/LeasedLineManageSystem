@@ -15,6 +15,7 @@ import {
   filtersForStat,
   followStatMonth,
   ledgerExportQuery,
+  ledgerPeriodExportQuery,
   ledgerListQuery
 } from '../client/src/ledger/query.js';
 import { beijingDate, beijingMonth, displayMoney, displayValue, inputValue } from '../client/src/utils.js';
@@ -40,6 +41,12 @@ test('ledger list and export queries carry the same filters, sort and KPI scope;
     assert.equal(params.get('kpiMode'), '0');
   }
   assert.equal(new URLSearchParams(ledgerExportQuery(emptyFilters, { sort, kpiMode: true })).get('kpiMode'), '1');
+});
+
+test('year and quarter export queries carry only the period and the KPI scope', () => {
+  assert.equal(ledgerPeriodExportQuery('quarter', true), 'period=quarter&kpiMode=1');
+  assert.equal(ledgerPeriodExportQuery('year', false), 'period=year&kpiMode=0');
+  assert.equal(new URLSearchParams(ledgerPeriodExportQuery('anything', true)).get('period'), 'year');
 });
 
 test('statistic filters replace other filters and only month-scoped ones follow the month', () => {

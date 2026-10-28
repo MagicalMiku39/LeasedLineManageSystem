@@ -259,6 +259,46 @@ test('protected ledger APIs cover list, edit, batch, stats, performance and expo
   assert.equal(exportedRows[0]['集团名称'], 'Beta');
 });
 
+test('year and quarter export lists the added and cancelled lines behind the period totals', async () => {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
+  const insert = db.prepare(`INSERT INTO leased_line
+    (group_code, group_name, group_product_code, product_name, product_status_name, ledger_status,
+     manager_name, start_time, status_time, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  insert.run('00123', 'Period New', 'PGP001', '互联网专线', '正常在用', '正常在用', 'Dan', `${today} 09:00:00`, `${today} 09:00:00`, nowIso());
+  insert.run('00456', 'Period Closed', 'PGP002', '互联网专线', '正式销户', '正式销户', 'Dan', '2020-01-05', `${today} 10:00:00`, nowIso());
+  insert.run('00789', 'Period Non KPI', 'PGP003', '其他产品', '正常在用', '正常在用', 'Dan', `${today} 11:00:00`, null, nowIso());
+
+  async function exportedSheets(query) {
+    const response = await request(`/api/ledger/export-period?${query}`);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type'), /spreadsheetml/);
+    assert.match(response.headers.get('content-disposition'), /filename\*=UTF-8''/);
+    const workbook = XLSX.read(Buffer.from(await response.arrayBuffer()));
+    assert.deepEqual(workbook.SheetNames, ['新增', '销户']);
+    return {
+      added: XLSX.utils.sheet_to_json(workbook.Sheets['新增'], { raw: false }),
+      cancelled: XLSX.utils.sheet_to_json(workbook.Sheets['销户'], { raw: false })
+    };
+  }
+
+  const stats = await (await request(`/api/stats?month=${today.slice(0, 7)}&kpiMode=1`)).json();
+  const year = await exportedSheets('period=year&kpiMode=1');
+  const quarter = await exportedSheets('period=quarter&kpiMode=1');
+  assert.equal(year.added.length, stats.addedInCurrentYear);
+  assert.equal(year.cancelled.length, stats.cancelledInCurrentYear);
+  assert.equal(quarter.added.length, stats.addedInCurrentQuarter);
+  assert.equal(quarter.cancelled.length, stats.cancelledInCurrentQuarter);
+
+  assert.ok(year.added.some((row) => row['集团编码'] === '00123'));
+  assert.ok(!year.added.some((row) => row['集团名称'] === 'Period Closed'));
+  assert.ok(year.cancelled.some((row) => row['集团编码'] === '00456'));
+  assert.ok(!year.added.some((row) => row['集团名称'] === 'Period Non KPI'));
+
+  const allProducts = await exportedSheets('period=year&kpiMode=0');
+  assert.ok(allProducts.added.some((row) => row['集团名称'] === 'Period Non KPI'));
+});
+
 test('warning day boundaries, KPI scope, authentication and persistent marks', async () => {
   const { stoppedDays, warningLevel } = await import('../server/lib/warnings.js');
   assert.equal(stoppedDays('2026-10-22 23:59:59', '2026-10-23'), 1);

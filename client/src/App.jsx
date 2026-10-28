@@ -11,6 +11,7 @@ import BatchModal from './ledger/BatchModal.jsx';
 import { defaultManagers } from './ledger/config.js';
 import DetailDrawer from './ledger/DetailDrawer.jsx';
 import LedgerView from './ledger/LedgerView.jsx';
+import { ledgerPeriodExportQuery } from './ledger/query.js';
 import { useColumnSettings } from './ledger/useColumnSettings.js';
 import { useLedger, useLedgerOptions, useLedgerStats } from './ledger/useLedgerData.js';
 import ManagerDashboard, { useManagerPerformance } from './ManagerDashboard.jsx';
@@ -145,6 +146,29 @@ function App() {
     window.location.href = `${apiBase}/ledger/export?${ledger.exportQuery}`;
   }
 
+  // The lines counted in the year / quarter totals; only the KPI scope applies, like those totals.
+  function exportPeriodChanges(period) {
+    window.location.href = `${apiBase}/ledger/export-period?${ledgerPeriodExportQuery(period, kpiMode)}`;
+  }
+
+  const periodYear = statsResource.stats?.currentYear;
+  const periodQuarter = statsResource.stats?.currentQuarter;
+  const ledgerExportMenu = [
+    { key: 'ledger', label: '导出当前台账', hint: '跟随当前筛选和排序', run: exportLedger },
+    {
+      key: 'year',
+      label: periodYear ? `${periodYear} 年新增与销户` : '本年度新增与销户',
+      hint: '新增、销户各一张表',
+      run: () => exportPeriodChanges('year')
+    },
+    {
+      key: 'quarter',
+      label: periodQuarter ? `第 ${periodQuarter} 季度新增与销户` : '本季度新增与销户',
+      hint: '新增、销户各一张表',
+      run: () => exportPeriodChanges('quarter')
+    }
+  ];
+
   // What the shared top-bar actions do on each page.
   const importAction = activeView === 'revenue'
     ? { kind: 'dialog', title: '导入收入报表', open: () => revenueActions.current?.openImport() }
@@ -154,7 +178,7 @@ function App() {
     operations: { title: '导出当前预警', run: () => operationsActions.current?.exportData() },
     revenue: { title: '导出当前收入视图', run: () => revenueActions.current?.exportData(), disabled: !revenueExportReady }
   };
-  const exportAction = exportActions[activeView] || { title: '导出台账', run: exportLedger };
+  const exportAction = exportActions[activeView] || { title: '导出台账', run: exportLedger, menu: ledgerExportMenu };
 
   function refreshCurrentView() {
     if (activeView === 'operations') {

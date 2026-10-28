@@ -21,6 +21,15 @@ export function ledgerExportQuery(filters, { sort, kpiMode }) {
   }).toString();
 }
 
+// Year / quarter added-and-cancelled export: only the period and the KPI scope, like the
+// year and quarter totals it matches; ledger filters do not apply.
+export function ledgerPeriodExportQuery(period, kpiMode) {
+  return new URLSearchParams({
+    period: period === 'quarter' ? 'quarter' : 'year',
+    kpiMode: kpiMode ? '1' : '0'
+  }).toString();
+}
+
 export function countActiveFilters(filters, keys) {
   return keys.filter((key) => Boolean(filters[key])).length;
 }

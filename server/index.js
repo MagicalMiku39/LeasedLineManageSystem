@@ -545,6 +545,43 @@ app.get('/api/ledger/export', (req, res) => {
   res.send(buffer);
 });
 
+// The lines behind the current year / quarter totals on the ledger page: same periods (Beijing
+// time), status sets and KPI scope as /api/stats, one sheet for added and one for cancelled.
+app.get('/api/ledger/export-period', (req, res) => {
+  const scope = req.query.period === 'quarter' ? 'quarter' : 'year';
+  const period = currentShanghaiPeriod();
+  const [start, end] = scope === 'quarter'
+    ? [period.quarterStart, period.nextQuarterStart]
+    : [period.yearStart, period.nextYearStart];
+  const source = leasedLineSource(req.query);
+  const columns = exportColumns.map(([, column]) => column).join(', ');
+  const selectRows = (timeColumn, statuses) => db.prepare(
+    `SELECT ${columns}
+     FROM ${source}
+     WHERE ${timeColumn} >= ? AND ${timeColumn} < ?
+       AND COALESCE(product_status_name, ledger_status, '') IN (${statuses.map(() => '?').join(', ')})
+     ORDER BY ${timeColumn} ASC, id ASC`
+  ).all(start, end, ...statuses);
+  const toSheet = (rows) => XLSX.utils.json_to_sheet(
+    rows.map((row) => Object.fromEntries(exportColumns.map(([label, column]) => [label, row[column] ?? '']))),
+    { header: exportColumns.map(([label]) => label) }
+  );
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, toSheet(selectRows('start_time', addedStatuses)), '新增');
+  XLSX.utils.book_append_sheet(workbook, toSheet(selectRows('status_time', cancelledStatuses)), '销户');
+  const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+  const label = scope === 'quarter' ? `${period.year}年第${period.quarter}季度` : `${period.year}年`;
+  const asciiName = scope === 'quarter' ? `${period.year}-Q${period.quarter}` : `${period.year}`;
+
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="leased-line-added-cancelled-${asciiName}.xlsx"; filename*=UTF-8''${encodeURIComponent(`${label}新增销户专线.xlsx`)}`
+  );
+  res.send(buffer);
+});
+
 app.patch('/api/ledger/batch', (req, res) => {
   const ids = Array.isArray(req.body.ids) ? req.body.ids.map(Number).filter(Number.isFinite) : [];
   if (ids.length === 0) {

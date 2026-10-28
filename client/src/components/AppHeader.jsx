@@ -1,5 +1,6 @@
-import React from 'react';
-import { Building2, Download, FileSpreadsheet, History, ListChecks, LogOut, RefreshCw, Upload, UsersRound } from 'lucide-react';
+import React, { useCallback, useRef, useState } from 'react';
+import { Building2, ChevronDown, Download, FileSpreadsheet, History, ListChecks, LogOut, RefreshCw, Upload, UsersRound } from 'lucide-react';
+import { useDismiss } from './useDismiss.js';
 
 export const views = [
   { key: 'ledger', label: '台账', icon: FileSpreadsheet },
@@ -8,6 +9,40 @@ export const views = [
   { key: 'operations', label: '运营中心', icon: ListChecks },
   { key: 'imports', label: '导入记录', icon: History }
 ];
+
+// "导出" with several choices: each item is { key, label, hint, run }.
+function ExportMenu({ items }) {
+  const container = useRef(null);
+  const [open, setOpen] = useState(false);
+  const close = useCallback(() => setOpen(false), []);
+  useDismiss(container, open, close);
+
+  return (
+    <div className="export-menu-wrap" ref={container}>
+      <button type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <Download size={16} /> 导出 <ChevronDown size={14} aria-hidden="true" />
+      </button>
+      {open && (
+        <div className="export-menu" role="menu">
+          {items.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                close();
+                item.run();
+              }}
+            >
+              <span>{item.label}</span>
+              {item.hint && <small>{item.hint}</small>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // The shared top bar: navigation, KPI scope and the import / export / refresh / logout
 // actions. Each action is resolved by the current page (see App).
@@ -61,9 +96,13 @@ export default function AppHeader({
             <input type="file" accept=".xlsx,.xls" onChange={importAction.onFile} disabled={importAction.busy} />
           </label>
         )}
-        <button type="button" disabled={exportAction.disabled} title={exportAction.title} onClick={exportAction.run}>
-          <Download size={16} /> 导出
-        </button>
+        {exportAction.menu ? (
+          <ExportMenu items={exportAction.menu} />
+        ) : (
+          <button type="button" disabled={exportAction.disabled} title={exportAction.title} onClick={exportAction.run}>
+            <Download size={16} /> 导出
+          </button>
+        )}
         <button type="button" title={refreshTitle} onClick={onRefresh} aria-busy={refreshing}>
           <RefreshCw size={16} className={refreshing ? 'spin' : undefined} /> 刷新
         </button>

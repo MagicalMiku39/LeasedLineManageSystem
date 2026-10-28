@@ -801,6 +801,53 @@ main {
   width: 230px;
 }
 
+.export-menu-wrap {
+  position: relative;
+}
+
+.export-menu {
+  position: absolute;
+  top: 42px;
+  right: 0;
+  z-index: 30;
+  display: grid;
+  gap: 2px;
+  width: 240px;
+  max-width: calc(100vw - 32px);
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow-float);
+}
+
+.export-menu button {
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+  width: 100%;
+  height: auto;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.export-menu button:hover,
+.export-menu button:focus-visible {
+  background: var(--accent-soft);
+}
+
+.export-menu small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
 .count-badge {
   display: inline-flex;
   align-items: center;
@@ -1496,6 +1543,24 @@ th.column-drop-after {
   .header-actions {
     justify-content: flex-start;
     margin-left: 0;
+  }
+
+  /* The actions wrap on narrow screens: hang the menu under the whole action row so it
+     never runs past the screen edge, whichever line the button lands on. */
+  .header-actions {
+    position: relative;
+  }
+
+  .export-menu-wrap {
+    position: static;
+  }
+
+  .export-menu {
+    top: calc(100% + 6px);
+    left: 0;
+    right: 0;
+    width: auto;
+    max-width: none;
   }
 
   .view-tabs {
