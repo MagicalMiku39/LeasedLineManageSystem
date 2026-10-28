@@ -22,7 +22,7 @@ const refreshTitles = {
   ledger: '重新读取台账、统计和筛选项',
   managers: '重新统计客户经理净增',
   revenue: '重新读取收入数据',
-  operations: '重新读取预警',
+  operations: '重新读取运营中心当前页面',
   imports: '重新读取导入记录'
 };
 
@@ -175,7 +175,7 @@ function App() {
     : { kind: 'file', title: '导入专线台账 Excel', busy: uploading, onFile: uploadLedgerExcel };
 
   const exportActions = {
-    operations: { title: '导出当前预警', run: () => operationsActions.current?.exportData() },
+    operations: { title: '导出运营中心当前页面', run: () => operationsActions.current?.exportData() },
     revenue: { title: '导出当前收入视图', run: () => revenueActions.current?.exportData(), disabled: !revenueExportReady }
   };
   const exportAction = exportActions[activeView] || { title: '导出台账', run: exportLedger, menu: ledgerExportMenu };

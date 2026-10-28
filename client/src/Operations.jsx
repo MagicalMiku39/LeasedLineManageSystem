@@ -1,12 +1,34 @@
 import React, { useEffect, useImperativeHandle, useMemo, useState } from 'react';
 import { Bell, BellOff, Mail, Search } from 'lucide-react';
+import KpiAchievement from './KpiAchievement.jsx';
 import { WarningMailDialog, WarningMailSettings } from './WarningMail.jsx';
 import { beijingDate, money } from './utils.js';
 import './operations.css';
 
 const labels = { unmarked: '未标注', remind: '提醒', ignore: '忽略' };
 const levels = { green: '绿色 · 0–89 天', yellow: '黄色 · 90–149 天', red: '红色 · 150–179 天', cancel: '待销户 · ≥180 天' };
+const sections = [
+  { key: 'warnings', label: '欠费销户预警' },
+  { key: 'kpi', label: 'KPI达成' }
+];
+
+// The operations centre: a sub-menu over its sections. The shared top-bar refresh and export
+// act on the section that is open (each one takes the ref).
 export default function Operations({ ref, kpiMode, refreshToken, onOpenLine }) {
+  const [section, setSection] = useState('warnings');
+  return <main className="operations-page">
+    <nav className="operations-tabs" aria-label="运营中心">
+      {sections.map(({ key, label }) => (
+        <button key={key} type="button" className={section === key ? 'active' : undefined} aria-current={section === key ? 'page' : undefined} onClick={() => setSection(key)}>{label}</button>
+      ))}
+    </nav>
+    {section === 'kpi'
+      ? <KpiAchievement ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} />
+      : <ArrearsWarnings ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} onOpenLine={onOpenLine} />}
+  </main>;
+}
+
+function ArrearsWarnings({ ref, kpiMode, refreshToken, onOpenLine }) {
   const [asOf, setAsOf] = useState(() => beijingDate());
   const [data, setData] = useState(null);
   const [keyword, setKeyword] = useState('');
@@ -65,9 +87,9 @@ export default function Operations({ ref, kpiMode, refreshToken, onOpenLine }) {
     } catch (err) { setError(err.message); }
     finally { setSaving(null); }
   }
-  return <main className="operations-page">
+  return <>
     <section className="operations-heading">
-      <div><p className="operations-eyebrow">运营中心</p><h2>欠费销户预警</h2><p className="operations-rule">停机且总欠费大于 0，按状态日期计算自然日差；满 180 天列为待销户。</p></div>
+      <div><h2>欠费销户预警</h2><p className="operations-rule">停机且总欠费大于 0，按状态日期计算自然日差；满 180 天列为待销户。</p></div>
       <label>统计日期<input type="date" value={asOf} disabled={saving !== null} onChange={(event) => event.target.value && setAsOf(event.target.value)} /></label>
     </section>
     <section className="operations-summary" aria-label="预警概览">
@@ -99,5 +121,5 @@ export default function Operations({ ref, kpiMode, refreshToken, onOpenLine }) {
       setData((current) => current && ({ ...current, rows: current.rows.map((item) => item.id === id ? { ...item, mark: 'remind' } : item) }));
       setNotice(`预警报告已提交至 ${result.recipient} 的发送队列`);
     }} />}
-  </main>;
+  </>;
 }

@@ -28,10 +28,6 @@ KPI 开关影响关联台账的数量与预计金额，集团报表总收入不�
 
 安装及授权参考[腾讯官方接入文档](https://agent.qq.com/doc/cli-setup.md)。OAuth 凭据由 CLI 保存在服务账户环境，项目不读取或复制令牌；客户经理邮箱与发送记录保存在 SQLite 中。迁移或发布代码时继续排除这些本地数据与授权凭据。
 
-## Android 客户端
-
-`android/` 是安卓远程客户端：在 App 内填写服务器的 HTTPS 地址，首次连接核对证书 SHA-256 指纹后访问，只允许 HTTPS。APK 由 GitHub Actions（`.github/workflows/android-apk.yml`）云端构建，签名密钥通过仓库 Secrets 提供。详见 [android/README.md](android/README.md)。
-
 ## 验证与数据
 
 运行 `npm test` 与 `npm run build`。测试使用独立临时数据库。`data/`、`uploads/`、`certs/` 与浏览器验证截图均排除 Git，不随代码发布业务数据。

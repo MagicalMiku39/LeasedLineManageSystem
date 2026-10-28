@@ -26,10 +26,8 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Android client build output and signing keys
-android/.gradle/
-android/build/
-android/app/build/
-android/local.properties
+# Android client: kept locally only, not published with this repository
+android/
+.github/workflows/android-apk.yml
 *.jks
 *.keystore

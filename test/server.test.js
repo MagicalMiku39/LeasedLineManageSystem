@@ -299,6 +299,96 @@ test('year and quarter export lists the added and cancelled lines behind the per
   assert.ok(allProducts.added.some((row) => row['集团名称'] === 'Period Non KPI'));
 });
 
+test('KPI achievement counts this year net, matches groups and keeps forecasts', async () => {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
+  const insert = db.prepare(`INSERT INTO leased_line
+    (group_code, group_name, group_product_code, product_name, product_status_name, ledger_status,
+     manager_name, start_time, status_time, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  insert.run('KPI001', 'Kpi Group', 'KGP001', '互联网专线', '正常在用', '正常在用', '张凯', `${today} 09:00:00`, null, nowIso());
+  insert.run('KPI001', 'Kpi Group', 'KGP002', '传输专线', '正常在用', '正常在用', '张凯', `${today} 09:00:00`, null, nowIso());
+  insert.run('KPI001', 'Kpi Group Old', 'KGP003', '传输专线', '正式销户', '正式销户', '冯琼', '2020-01-01', `${today} 09:00:00`, nowIso());
+
+  const stats = await (await request(`/api/stats?month=${today.slice(0, 7)}&kpiMode=1`)).json();
+  const overview = await (await request('/api/kpi?kpiMode=1')).json();
+  assert.equal(overview.target, 230);
+  assert.deepEqual(overview.months, [11, 12]);
+  assert.equal(overview.actual.added, stats.addedInCurrentYear);
+  assert.equal(overview.actual.cancelled, stats.cancelledInCurrentYear);
+  assert.equal(overview.actual.net, stats.addedInCurrentYear - stats.cancelledInCurrentYear);
+  const zhang = overview.managers.find((row) => row.manager_name === '张凯');
+  assert.ok(zhang.added >= 2);
+  assert.equal(zhang.net, zhang.added - zhang.cancelled);
+  assert.equal(overview.forecast.added, 0);
+
+  const groups = await (await request('/api/kpi/groups?q=KPI00')).json();
+  assert.deepEqual(groups.find((row) => row.group_code === 'KPI001'), { group_code: 'KPI001', group_name: 'Kpi Group', manager_name: '张凯' });
+  assert.deepEqual(await (await request('/api/kpi/groups?q=')).json(), []);
+
+  const invalid = [
+    { group_code: '', product_type: '互联网专线', line_count: 1, month: 11 },
+    { group_code: 'KPI001', product_type: '不存在', line_count: 1, month: 11 },
+    { group_code: 'KPI001', product_type: '互联网专线', line_count: 1, month: 10 },
+    { group_code: 'KPI001', product_type: '互联网专线', line_count: 0, month: 12 },
+    { group_code: 'NEW999', product_type: '互联网专线', line_count: 1, month: 12, group_name: '' }
+  ];
+  for (const body of invalid) {
+    assert.equal((await request('/api/kpi/forecasts', { method: 'POST', body })).status, 400);
+  }
+
+  // A known group takes the ledger's name and manager, whatever the form sent.
+  const known = await request('/api/kpi/forecasts', {
+    method: 'POST', body: { group_code: 'KPI001', group_name: 'typed', manager_name: '王倩', product_type: '互联网专线', line_count: 3, month: 11 }
+  });
+  assert.equal(known.status, 201);
+  const knownRow = await known.json();
+  assert.equal(knownRow.group_name, 'Kpi Group');
+  assert.equal(knownRow.manager_name, '张凯');
+  const fresh = await request('/api/kpi/forecasts', {
+    method: 'POST', body: { group_code: 'NEW999', group_name: '新集团', manager_name: '王倩', product_type: 'SPN专线', line_count: 2, month: 12 }
+  });
+  assert.equal(fresh.status, 201);
+  const freshRow = await fresh.json();
+
+  const cancel = await request('/api/kpi/forecasts', {
+    method: 'POST', body: { kind: 'cancelled', group_code: 'KPI001', product_type: '传输专线', line_count: 1, month: 12 }
+  });
+  assert.equal(cancel.status, 201);
+  assert.equal((await cancel.json()).kind, 'cancelled');
+  assert.equal((await request('/api/kpi/forecasts', {
+    method: 'POST', body: { kind: 'moved', group_code: 'KPI001', product_type: '传输专线', line_count: 1, month: 12 }
+  })).status, 400);
+
+  let next = await (await request('/api/kpi?kpiMode=1')).json();
+  assert.equal(next.forecast.added, 5);
+  assert.equal(next.forecast.cancelled, 1);
+  assert.equal(next.forecast.net, 4);
+  assert.deepEqual(next.forecast.byMonth, { 11: { added: 3, cancelled: 0 }, 12: { added: 2, cancelled: 1 } });
+  assert.equal(next.forecast.expectedNet, next.actual.net + 5 - 1);
+
+  // The year's target is editable and replaces the default.
+  assert.equal((await request('/api/kpi/target', { method: 'PUT', body: { target: 0 } })).status, 400);
+  assert.equal((await request('/api/kpi/target', { method: 'PUT', body: { target: 2.5 } })).status, 400);
+  assert.equal((await request('/api/kpi/target', { method: 'PUT', body: { target: 260 } })).status, 200);
+  next = await (await request('/api/kpi?kpiMode=1')).json();
+  assert.equal(next.target, 260);
+  assert.equal(next.defaultTarget, 230);
+
+  assert.equal((await request(`/api/kpi/forecasts/${knownRow.id}`, { method: 'PATCH', body: { landed: true } })).status, 200);
+  assert.equal((await request(`/api/kpi/forecasts/${freshRow.id}`, { method: 'PATCH', body: { line_count: 4 } })).status, 200);
+  assert.equal((await request(`/api/kpi/forecasts/${freshRow.id}`, { method: 'PATCH', body: { line_count: -1 } })).status, 400);
+  next = await (await request('/api/kpi?kpiMode=1')).json();
+  assert.equal(next.forecast.added, 4);
+  assert.equal(next.forecasts.find((row) => row.id === knownRow.id).landed, true);
+
+  assert.equal((await request(`/api/kpi/forecasts/${freshRow.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await request(`/api/kpi/forecasts/${freshRow.id}`, { method: 'DELETE' })).status, 404);
+  next = await (await request('/api/kpi?kpiMode=1')).json();
+  assert.equal(next.forecast.added, 0);
+  assert.equal(next.forecast.cancelled, 1);
+  assert.equal(next.forecasts.length, 2);
+});
+
 test('warning day boundaries, KPI scope, authentication and persistent marks', async () => {
   const { stoppedDays, warningLevel } = await import('../server/lib/warnings.js');
   assert.equal(stoppedDays('2026-10-22 23:59:59', '2026-10-23'), 1);

@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ApiError, requestJson } from '../client/src/api.js';
-import { advancedFilterKeys, defaultVisibleColumns, emptyFilters, tableColumns } from '../client/src/ledger/config.js';
+import { kpiManagerRows } from '../client/src/kpiRows.js';
+import { advancedFilterKeys, defaultManagers, defaultVisibleColumns, emptyFilters, tableColumns } from '../client/src/ledger/config.js';
 import {
   moveColumn,
   normalizeColumnOrder,
@@ -41,6 +42,27 @@ test('ledger list and export queries carry the same filters, sort and KPI scope;
     assert.equal(params.get('kpiMode'), '0');
   }
   assert.equal(new URLSearchParams(ledgerExportQuery(emptyFilters, { sort, kpiMode: true })).get('kpiMode'), '1');
+});
+
+test('KPI manager rows keep all 18 managers with zeros and skip landed forecasts', () => {
+  const managers = [{ manager_name: '张凯', added: 5, cancelled: 1 }, { manager_name: 'Other', added: 2, cancelled: 0 }];
+  const forecasts = [
+    { manager_name: '张凯', kind: 'added', line_count: 3, landed: false },
+    { manager_name: '张凯', kind: 'cancelled', line_count: 2, landed: false },
+    { manager_name: '张凯', kind: 'added', line_count: 9, landed: true },
+    { manager_name: 'Newcomer', kind: 'added', line_count: 1, landed: false }
+  ];
+  const defaults = kpiManagerRows(managers, forecasts, 'defaults');
+  assert.equal(defaults.length, defaultManagers.length);
+  assert.deepEqual(defaults[0], {
+    manager_name: '张凯', added: 5, cancelled: 1, net: 4, forecastAdded: 3, forecastCancelled: 2, expectedNet: 5
+  });
+  assert.ok(defaults.slice(1).every((row) => row.added === 0 && row.net === 0));
+  assert.ok(!defaults.some((row) => row.manager_name === 'Other'));
+
+  const all = kpiManagerRows(managers, forecasts, 'all');
+  assert.deepEqual(all.map((row) => row.manager_name), ['张凯', 'Other', 'Newcomer']);
+  assert.equal(all[2].expectedNet, 1);
 });
 
 test('year and quarter export queries carry only the period and the KPI scope', () => {
