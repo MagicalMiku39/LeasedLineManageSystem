@@ -110,7 +110,9 @@ extendedKeyUsage = clientAuth
     runOpenssl(bin, paths, ['x509', '-req', '-in', inWork('device.csr'), '-CA', 'ca.crt', '-CAkey', 'ca.key', '-set_serial', `0x${serial}`,
       '-days', String(days), '-sha256', '-extfile', inWork('req.cnf'), '-extensions', 'v3_client', '-out', inWork('device.crt')]);
     // These older algorithms are the ones every Android version can read; the random password protects the file.
-    runOpenssl(bin, paths, ['pkcs12', '-export', '-inkey', inWork('device.key'), '-in', inWork('device.crt'), '-certfile', 'ca.crt', '-name', 'device',
+    // Windows names the stored private key after -name, so it must differ per certificate: under a
+    // fixed name the key could not be loaded, and browsers refused the certificate.
+    runOpenssl(bin, paths, ['pkcs12', '-export', '-inkey', inWork('device.key'), '-in', inWork('device.crt'), '-certfile', 'ca.crt', '-name', `ledger-${serial}`,
       '-keypbe', 'PBE-SHA1-3DES', '-certpbe', 'PBE-SHA1-3DES', '-macalg', 'sha1', '-passout', 'env:LEDGER_P12_PASSWORD', '-out', inWork('device.p12')],
     { LEDGER_P12_PASSWORD: password });
     const notAfter = runOpenssl(bin, paths, ['x509', '-in', inWork('device.crt'), '-noout', '-enddate']).trim().replace('notAfter=', '');

@@ -283,6 +283,16 @@ test('device certificates open the port; missing, foreign and revoked ones do no
   const other = issueDevice(dir, 'other-phone');
   assert.ok(!readdirSync(dir).some((name) => name.startsWith('work-')), 'no key material is left behind');
 
+  // Windows names the stored private key after this, so every certificate needs its own.
+  const friendlyName = (device) => /friendlyName:\s*(\S+)/.exec(execFileSync(openssl, ['pkcs12', '-in', '-', '-nokeys', '-passin', 'env:P12', '-info'], {
+    input: device.pfx,
+    env: { ...process.env, P12: device.passphrase },
+    encoding: 'utf8',
+    stdio: ['pipe', 'pipe', 'ignore']
+  }))?.[1];
+  assert.equal(friendlyName(phone), `ledger-${phone.serial}`);
+  assert.equal(friendlyName(other), `ledger-${other.serial}`);
+
   // A certificate from another CA must not be accepted even with the same tools.
   const foreignDir = mkdtempSync(join(root, 'foreign-'));
   assert.equal(run(foreignDir, 'init').status, 0);
