@@ -676,6 +676,68 @@ main {
   margin-top: 18px;
 }
 
+.change-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.change-chips button {
+  height: 30px;
+  padding: 0 11px;
+  font-size: 13px;
+}
+
+.change-chips button[aria-pressed="true"] {
+  border-color: rgba(0, 113, 227, .45);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.change-chips strong {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.change-empty {
+  margin: 0;
+  padding: 18px 16px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.changes-table {
+  min-width: 900px;
+}
+
+.change-value {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.change-value em {
+  font-style: normal;
+}
+
+.change-value b {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.change-more {
+  display: flex;
+  justify-content: center;
+  padding: 12px;
+  border-top: 1px solid var(--rule);
+}
+
+.overview-freshness {
+  margin-left: auto;
+}
+
 .multi-select {
   position: relative;
   min-width: 0;

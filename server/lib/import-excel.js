@@ -1,6 +1,15 @@
 import XLSX from './xlsx.js';
 import { db, makeBatchId, nowIso } from './db.js';
 import { excelFieldMap, excelHeaders } from './field-map.js';
+import {
+  beijingYear,
+  changeRecorder,
+  computeYearNet,
+  diffLine,
+  importChangeSummary,
+  previousFinishedBatchId,
+  saveImportSummary
+} from './ledger-changes.js';
 
 const dbColumns = Object.values(excelFieldMap);
 
@@ -78,8 +87,14 @@ export function importExcel(filePath, fileName) {
      VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run(batchId, fileName, sheetName, rows.length, startedAt, 'running', '导入中');
 
+  // The first import has nothing to compare against: it only sets the starting point.
+  const previousBatchId = previousFinishedBatchId(batchId);
+  const year = beijingYear();
+  const netBefore = computeYearNet(db, year);
+  const recordChange = changeRecorder(batchId, startedAt);
+
   const findExisting = db.prepare(
-    `SELECT id FROM leased_line WHERE group_product_code = ? AND group_product_code IS NOT NULL AND group_product_code <> ''`
+    `SELECT * FROM leased_line WHERE group_product_code = ? AND group_product_code IS NOT NULL AND group_product_code <> ''`
   );
   const insert = createInsertStatement();
   const update = createUpdateStatement();
@@ -98,6 +113,11 @@ export function importExcel(filePath, fileName) {
         const timestamp = nowIso();
 
         if (existing) {
+          const current = { ...existing, ...record, id: existing.id };
+          for (const change of diffLine(existing, record)) recordChange(current, change);
+          if (previousBatchId && existing.import_batch_id !== previousBatchId) {
+            recordChange(current, { type: 'restored', note: '上次导入的报表里没有这条，这次又出现了' });
+          }
           const values = update.columns.map((column) => {
             if (column === 'import_batch_id') return batchId;
             if (column === 'updated_at') return timestamp;
@@ -115,12 +135,29 @@ export function importExcel(filePath, fileName) {
           const result = insert.statement.run(...values);
           successRows += 1;
           log.run(batchId, excelRowNumber, 'success', '已新增记录', Number(result.lastInsertRowid));
+          if (previousBatchId) {
+            recordChange({ ...record, id: Number(result.lastInsertRowid) }, {
+              type: 'added',
+              note: record.product_status_name ? `状态 ${record.product_status_name}` : ''
+            });
+          }
         }
       } catch (error) {
         failedRows += 1;
         log.run(batchId, excelRowNumber, 'failed', error.message, null);
       }
     });
+    // In the previous report but not this one. The line itself stays as it was.
+    if (previousBatchId) {
+      const absent = db.prepare(
+        `SELECT id, group_product_code, group_name, manager_name, product_status_name FROM leased_line
+         WHERE import_batch_id = ? AND group_product_code IS NOT NULL AND group_product_code <> ''`
+      ).all(previousBatchId);
+      for (const line of absent) {
+        recordChange(line, { type: 'missing', note: `这次的报表里没有这条，台账仍保留原状态${line.product_status_name ? ` ${line.product_status_name}` : ''}` });
+      }
+    }
+    saveImportSummary({ batchId, year, netBefore, netAfter: computeYearNet(db, year), baseline: !previousBatchId });
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');
@@ -140,6 +177,7 @@ export function importExcel(filePath, fileName) {
     totalRows: rows.length,
     successRows,
     failedRows,
-    updatedRows
+    updatedRows,
+    changes: importChangeSummary(batchId)
   };
 }

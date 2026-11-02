@@ -17,6 +17,7 @@ import { useLedger, useLedgerOptions, useLedgerStats } from './ledger/useLedgerD
 import ManagerDashboard, { useManagerPerformance } from './ManagerDashboard.jsx';
 import Operations from './Operations.jsx';
 import Settings from './Settings.jsx';
+import { changeSummaryText } from './ledgerChanges.js';
 import { beijingMonth } from './utils.js';
 
 const refreshTitles = {
@@ -121,9 +122,10 @@ function App() {
     formData.append('file', file);
     try {
       const data = await requestJson('/import', { method: 'POST', body: formData });
+      const changes = changeSummaryText(data.changes);
       setNotice({
         tone: data.failedRows > 0 ? 'error' : 'success',
-        text: `${file.name} 导入完成：新增 ${data.successRows} 条，更新 ${data.updatedRows} 条，失败 ${data.failedRows} 条${data.failedRows > 0 ? '，失败原因见“导入记录”' : ''}`
+        text: `${file.name} 导入完成：新增 ${data.successRows} 条，更新 ${data.updatedRows} 条，失败 ${data.failedRows} 条${data.failedRows > 0 ? '，失败原因见“导入记录”' : ''}${changes ? `。${changes}，明细见“导入记录”` : ''}${data.forecastSuggestions > 0 ? `。有 ${data.forecastSuggestions} 条专线可能对应预计任务，请到“KPI达成”确认` : ''}`
       });
       setOperationsRevision((value) => value + 1);
       setImportsRevision((value) => value + 1);
@@ -230,7 +232,7 @@ function App() {
           />
         );
       case 'imports':
-        return <ImportRecords refreshToken={importsRevision} />;
+        return <ImportRecords refreshToken={importsRevision} onOpenLine={openDetail} />;
       case 'settings':
         return <Settings refreshToken={settingsRevision} />;
       case 'managers':

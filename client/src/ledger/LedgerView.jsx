@@ -3,6 +3,7 @@ import { CheckSquare, Columns3, Search, SlidersHorizontal } from 'lucide-react';
 import { InlineError } from '../components/Feedback.jsx';
 import MultiSelectFilter from '../components/MultiSelectFilter.jsx';
 import { useDismiss } from '../components/useDismiss.js';
+import { dataFreshness } from '../ledgerChanges.js';
 import { money } from '../utils.js';
 import { advancedFilterKeys, ledgerPageSize, statCards } from './config.js';
 import LedgerTable from './LedgerTable.jsx';
@@ -39,6 +40,7 @@ function LedgerOverview({ stats, statsError, onRetryStats, month, onMonthChange,
           added={stats?.addedInCurrentQuarter}
           cancelled={stats?.cancelledInCurrentQuarter}
         />
+        {stats && <span className="subtle overview-freshness">{dataFreshness(stats.lastImportAt)}</span>}
       </div>
       <InlineError message={statsError && `统计读取失败：${statsError}`} onRetry={onRetryStats} />
       <div className="stat-strip">

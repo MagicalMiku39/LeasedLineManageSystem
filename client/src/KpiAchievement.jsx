@@ -4,6 +4,7 @@ import { isAbort, jsonBody, requestJson } from './api.js';
 import { InlineError } from './components/Feedback.jsx';
 import KpiProgress from './KpiProgress.jsx';
 import { forecastState, kpiManagerRows } from './kpiRows.js';
+import { dataFreshness } from './ledgerChanges.js';
 import { defaultManagers } from './ledger/config.js';
 import { beijingTime, netClass, signedNumber } from './utils.js';
 
@@ -183,6 +184,7 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken }) {
     }
   }
 
+  const suggestionTotal = forecasts.reduce((sum, row) => sum + (row.suggestions || 0), 0);
   const target = data?.target;
   const actual = data?.actual;
   const forecast = data?.forecast;
@@ -200,7 +202,7 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken }) {
         <div>
           <h2>KPI 达成</h2>
           <p className="operations-rule">
-            {data ? `${data.year} 年度目标为净增 ${target} 条专线。` : ''}净增 = 新增 − 销户，新增按开始时间、销户按状态时间，与台账年度统计口径一致，遵循 KPI 统计模式。
+            {data ? `${data.year} 年度目标为净增 ${target} 条专线。` : ''}净增 = 新增 − 销户，新增按开始时间、销户按状态时间，与台账年度统计口径一致，遵循 KPI 统计模式。{data ? `${dataFreshness(data.lastImportAt)}。` : ''}
           </p>
         </div>
       </section>
@@ -427,7 +429,7 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken }) {
                     <td className={row.landed ? undefined : row.kind === 'cancelled' ? 'kpi-cancelled' : 'kpi-added'}>{kindLabels[row.kind]}</td>
                     <td>{row.month}月</td>
                     <td>{row.group_code}</td>
-                    <td>{row.group_name}</td>
+                    <td>{row.group_name}{row.suggestions > 0 && <span className="status-pill kpi-suggestion-pill">可能已{row.kind === 'cancelled' ? '销户' : '落地'} {row.suggestions}</span>}</td>
                     <td>{row.manager_name}</td>
                     <td>{row.product_type}</td>
                     <td className="num">{row.line_count}</td>
@@ -467,6 +469,7 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken }) {
               </tbody>
             </table>
           </div>
+          {suggestionTotal > 0 && <p className="kpi-suggestion-note" role="status">导入后发现可能对应预计任务的专线，点击带标记的任务确认。确认前不会改动任何数字。</p>}
           <p className="operations-rule">预计年度净增 = 当前净增 + 预计新增 − 预计销户，只计尚未落地的条数。点击一行可以查看和更新进展；专线实际开通或销户、已体现在台账中后，请填写已落地条数，或点“已落地”“已销户”表示全部完成，避免重复计算。</p>
         </section>
       </div>

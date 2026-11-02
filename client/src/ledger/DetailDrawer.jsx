@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Save, X } from 'lucide-react';
 import { isAbort, jsonBody, requestJson } from '../api.js';
 import { InlineError } from '../components/Feedback.jsx';
-import { displayValue, inputValue } from '../utils.js';
+import { changeFieldLabels, changeTypeLabel } from '../ledgerChanges.js';
+import { beijingTime, displayValue, inputValue } from '../utils.js';
 import { batchFields, fieldLabels } from './config.js';
 
 // Fields the drawer edits: every batch-editable field plus renewal and contact details.
@@ -67,6 +68,46 @@ function ChangeLog({ logs, error, loading }) {
             <em>{log.new_value || '空'}</em>
           </p>
           <time>{log.changed_at}</time>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// What each import changed on this line, newest first.
+function ImportHistory({ lineId }) {
+  const [state, setState] = useState({ rows: [], loading: true, error: '' });
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setState({ rows: [], loading: true, error: '' });
+    requestJson(`/ledger/${lineId}/changes`, { signal: controller.signal })
+      .then((rows) => setState({ rows, loading: false, error: '' }))
+      .catch((error) => {
+        if (!isAbort(error)) setState({ rows: [], loading: false, error: error.message });
+      });
+    return () => controller.abort();
+  }, [lineId]);
+
+  if (state.error) return <InlineError message={`变更历史读取失败：${state.error}`} />;
+  if (state.loading) return <div className="empty-small">正在读取变更历史…</div>;
+  if (state.rows.length === 0) return <div className="empty-small">暂无导入变更</div>;
+  return (
+    <div className="log-list">
+      {state.rows.map((row) => (
+        <div className="log-item" key={row.id}>
+          <div>
+            <strong>{changeTypeLabel(row.change_type)}</strong>
+            <span>{changeFieldLabels[row.field_name] || row.note || ''}</span>
+          </div>
+          {row.field_name && (
+            <p>
+              <em>{row.old_value || '空'}</em>
+              <b>→</b>
+              <em>{row.new_value || '空'}</em>
+            </p>
+          )}
+          <time>{beijingTime(row.created_at)}</time>
         </div>
       ))}
     </div>
@@ -174,6 +215,11 @@ export default function DetailDrawer({ record, onClose, onSaved }) {
             {section.fields.map(renderField)}
           </section>
         ))}
+
+        <section>
+          <h3>导入变更历史</h3>
+          <ImportHistory lineId={record.id} />
+        </section>
 
         <section>
           <h3>修改记录</h3>

@@ -3,13 +3,15 @@ import { X } from 'lucide-react';
 import { isAbort, jsonBody, requestJson } from './api.js';
 import { InlineError } from './components/Feedback.jsx';
 import { forecastState } from './kpiRows.js';
-import { beijingTime } from './utils.js';
+import { beijingTime, displayValue } from './utils.js';
 
 const maxNote = 500;
 
 // One forecast's history and the form that adds to it. Updates are only ever added, never edited.
 export default function KpiProgress({ forecastId, onClose, onChanged }) {
-  const [state, setState] = useState({ forecast: null, entries: [], loading: true, error: '' });
+  const [state, setState] = useState({ forecast: null, entries: [], suggestions: [], loading: true, error: '' });
+  const [deciding, setDeciding] = useState(null);
+  const [matchError, setMatchError] = useState('');
   const [retry, setRetry] = useState(0);
   const [note, setNote] = useState('');
   const [landedCount, setLandedCount] = useState('');
@@ -44,7 +46,21 @@ export default function KpiProgress({ forecastId, onClose, onChanged }) {
     }
   }
 
-  const { forecast, entries } = state;
+  async function decide(line, action) {
+    setDeciding(line.line_id);
+    setMatchError('');
+    try {
+      await requestJson(`/kpi/forecasts/${forecastId}/matches`, jsonBody('POST', { line_id: line.line_id, action }));
+      setRetry((value) => value + 1);
+      onChanged();
+    } catch (err) {
+      setMatchError(err.message);
+    } finally {
+      setDeciding(null);
+    }
+  }
+
+  const { forecast, entries, suggestions } = state;
   const countWord = forecast?.kind === 'cancelled' ? '已销户' : '已落地';
 
   return (
@@ -73,6 +89,34 @@ export default function KpiProgress({ forecastId, onClose, onChanged }) {
                 <dt>进度</dt>
                 <dd>{forecastState(forecast)}：{countWord} {forecast.landed_count} 条，还有 {forecast.remaining} 条计入预计</dd>
               </dl>
+
+              {suggestions.length > 0 && (
+                <section className="kpi-suggestions" aria-label="可能对应的专线">
+                  <h4>可能对应的专线（{suggestions.length}）</h4>
+                  <p className="subtle">这个集团在你登记之后{forecast.kind === 'cancelled' ? '有这些专线销户' : '导入了这些新专线'}。是否对应这个任务由你确认，确认后才计入{countWord}条数。</p>
+                  <InlineError message={matchError} />
+                  <ul>
+                    {suggestions.map((line) => (
+                      <li key={line.line_id}>
+                        <div>
+                          <strong>{line.group_product_code}</strong>
+                          <span>
+                            {line.product_name}
+                            {!line.sameProduct && <em> · 和预计类型不同</em>}
+                            {' · '}{forecast.kind === 'cancelled' ? `状态时间 ${displayValue(line.status_time)}` : `开始时间 ${displayValue(line.start_time)}`}
+                            {' · '}{displayValue(line.status)}
+                          </span>
+                          <span>{beijingTime(line.imported_at)} 导入</span>
+                        </div>
+                        <div className="kpi-suggestion-actions">
+                          <button type="button" className="primary" disabled={deciding !== null} onClick={() => decide(line, 'confirm')}>确认{forecast.kind === 'cancelled' ? '销户' : '落地'}</button>
+                          <button type="button" disabled={deciding !== null} onClick={() => decide(line, 'dismiss')}>不是这条</button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
 
               <form className="kpi-progress-form" onSubmit={submit}>
                 <label>

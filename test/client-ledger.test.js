@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ApiError, requestJson } from '../client/src/api.js';
 import { forecastState, kpiManagerRows } from '../client/src/kpiRows.js';
+import { changeSummaryText, dataFreshness } from '../client/src/ledgerChanges.js';
 import { describeSource, isAlertEvent } from '../client/src/securityLog.js';
 import { advancedFilterKeys, defaultManagers, defaultVisibleColumns, emptyFilters, tableColumns } from '../client/src/ledger/config.js';
 import {
@@ -64,6 +65,19 @@ test('KPI manager rows keep all 18 managers with zeros and skip landed forecasts
   const all = kpiManagerRows(managers, forecasts, 'all');
   assert.deepEqual(all.map((row) => row.manager_name), ['张凯', 'Other', 'Newcomer']);
   assert.equal(all[2].expectedNet, 1);
+});
+
+test('the import notice names only what changed, and pages say how current the data is', () => {
+  const summary = (counts, netBefore = 83, netAfter = 80) => ({ year: 2026, netBefore, netAfter, baseline: false, counts });
+  assert.equal(changeSummaryText(summary({ added: 3, cancelled: 5, manager: 2 })), '转销户 5 条，换客户经理 2 条，2026 年净增 83 → 80');
+  assert.equal(changeSummaryText(summary({}, 83, 83)), '2026 年净增不变（83）');
+  assert.equal(changeSummaryText({ baseline: true, counts: {} }), '');
+  assert.equal(changeSummaryText(null), '');
+
+  const now = new Date('2026-11-02T12:00:00+08:00');
+  assert.equal(dataFreshness('2026-09-11T07:07:00.000Z', now), '数据截至 2026-09-11 导入（52 天前）');
+  assert.equal(dataFreshness('2026-11-02T01:00:00.000Z', now), '数据截至 2026-11-02 导入（今天）');
+  assert.equal(dataFreshness(null, now), '还没有导入过台账');
 });
 
 test('a forecast state follows how much of it has landed', () => {

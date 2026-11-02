@@ -10,6 +10,17 @@ import { pathToFileURL } from 'node:url';
 import { db, nowIso } from './lib/db.js';
 import { editableFields } from './lib/field-map.js';
 import { importExcel } from './lib/import-excel.js';
+import { lastImportAt, listBatchChanges, listLineChanges } from './lib/ledger-changes.js';
+import {
+  addedStatuses,
+  billableStatuses,
+  cancelledStatuses,
+  kpiProductNames,
+  kpiProductSqlList,
+  normalStatus,
+  stoppedStatus,
+  stoppingStatus
+} from './lib/ledger-rules.js';
 import XLSX from './lib/xlsx.js';
 import { createRevenueRouter } from './lib/revenue.js';
 import { createWarningsRouter } from './lib/warnings.js';
@@ -183,36 +194,6 @@ export function ledgerOrderBy(query) {
     sql: `ORDER BY CASE WHEN ${expression} IS NULL OR TRIM(CAST(${expression} AS TEXT)) = '' THEN 1 ELSE 0 END ASC, ${expression} ${direction}, id DESC`
   };
 }
-
-const normalStatus = '正常在用';
-const stoppingStatus = '停机执行中';
-const stoppedStatus = '停机';
-const billableStatuses = [normalStatus, stoppingStatus, stoppedStatus];
-const addedStatuses = [
-  '欠费销户',
-  stoppedStatus,
-  stoppingStatus,
-  '销户(订单处理中)',
-  '销户（订单处理中）',
-  normalStatus,
-  '正式销户'
-];
-const cancelledStatuses = ['欠费销户', '正式销户', '销户(订单处理中)', '销户（订单处理中）'];
-const kpiProductNames = [
-  '互联网专线',
-  '传输专线',
-  'OTN政企专网',
-  '跨省互联网专线',
-  '国际政企专网专线',
-  '新跨省专线产品',
-  'SPN专线',
-  'MPLS VPN专线',
-  '跨国专线A类产品',
-  '跨省专线产品'
-];
-const kpiProductSqlList = kpiProductNames
-  .map((name) => `'${name.replaceAll("'", "''")}'`)
-  .join(', ');
 
 export function isKpiMode(query) {
   return String(query.kpiMode ?? '1') !== '0';
@@ -418,7 +399,7 @@ app.post('/api/import', receiveLedgerFile, (req, res) => {
 
   try {
     const result = importExcel(req.file.path, normalizeUploadedFilename(req.file.originalname));
-    res.json(result);
+    res.json({ ...result, forecastSuggestions: kpiRouter.countSuggestions() });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -432,6 +413,10 @@ app.get('/api/imports', (_req, res) => {
     sheet_name: repairMojibake(row.sheet_name),
     message: repairMojibake(row.message)
   })));
+});
+
+app.get('/api/imports/:id/changes', (req, res) => {
+  res.json(listBatchChanges(req.params.id, req.query));
 });
 
 app.get('/api/imports/:id/rows', (req, res) => {
@@ -651,6 +636,10 @@ app.patch('/api/ledger/batch', (req, res) => {
   }
 
   res.json({ updated: ids.length });
+});
+
+app.get('/api/ledger/:id/changes', (req, res) => {
+  res.json(listLineChanges(Number(req.params.id)));
 });
 
 app.get('/api/ledger/:id/logs', (req, res) => {
@@ -938,6 +927,7 @@ app.get('/api/stats', (req, res) => {
   res.json({
     month,
     kpiMode: isKpiMode(req.query),
+    lastImportAt: lastImportAt(),
     total,
     active,
     cancelled,
@@ -969,7 +959,7 @@ app.use('/api/settings/client-certs', createClientCertRouter({
   logEvent: logSecurityEvent
 }));
 app.get('/api/settings/security-log', securityLogHandler);
-app.use('/api/kpi', createKpiRouter({
+const kpiRouter = createKpiRouter({
   db,
   leasedLineSource,
   currentUser,
@@ -977,7 +967,8 @@ app.use('/api/kpi', createKpiRouter({
   addedStatuses,
   cancelledStatuses,
   productTypes: kpiProductNames
-}));
+});
+app.use('/api/kpi', kpiRouter);
 
 if (existsSync(distDir)) {
   app.use(express.static(distDir));

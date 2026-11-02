@@ -1,7 +1,7 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -395,6 +395,75 @@ test('protected ledger APIs cover list, edit, batch, stats, performance and expo
   assert.equal(exportedRows[0]['集团名称'], 'Beta');
 });
 
+test('imports record what changed, keep the year net before and after, and notice lines that vanish', async () => {
+  const path = join(tempDir, 'changes.xlsx');
+  const year = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric' }).format(new Date());
+  const line = (code, values = {}) => ({
+    '集团编码': `G-${code}`, '集团名称': `集团${code}`, '集团产品编码': code, '产品名称': '互联网专线',
+    '产品状态名称': '正常在用', '客户经理名称': '甲', '客户经理工号': 'A1', '开始时间': `${year}-02-01`, '活动套餐资费': '100', ...values
+  });
+  function importRows(rows) {
+    const book = XLSX.utils.book_new();
+    const headers = excelHeaders;
+    XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(rows.map((row) => Object.fromEntries(headers.map((header) => [header, row[header] ?? '']))), { header: headers }), 'Sheet1');
+    XLSX.writeFile(book, path);
+    return importer.importExcel(path, 'changes.xlsx');
+  }
+  const byType = (batchId) => {
+    const counts = {};
+    for (const row of db.prepare('SELECT change_type, COUNT(*) c FROM ledger_change WHERE batch_id = ? GROUP BY change_type').all(batchId)) counts[row.change_type] = row.c;
+    return counts;
+  };
+
+  const first = importRows([line('C1'), line('C2'), line('C3'), line('C4')]);
+  // Lines from earlier tests are reported as gone once; these four are new.
+  assert.equal(first.changes.counts.added, 4);
+  const netAfterFirst = first.changes.netAfter;
+  assert.equal(netAfterFirst - first.changes.netBefore, 4);
+
+  const second = importRows([
+    line('C1', { '产品状态名称': '正式销户', '状态时间': `${year}-03-01` }),
+    line('C2', { '客户经理名称': '乙', '客户经理工号': 'B2', '活动套餐资费': '200' }),
+    line('C3', { '活动套餐资费': '' }),
+    line('C5')
+  ]);
+  assert.deepEqual(byType(second.batchId), { cancelled: 1, manager: 2, fee: 1, added: 1, missing: 1 });
+  assert.equal(second.changes.counts.manager, 1, 'one line, even when name and job number both change');
+  assert.equal(second.changes.netBefore, netAfterFirst);
+  // C1 cancelled, C5 added: 新增 keeps C1 too, since it started this year, so the net moves by one each way.
+  assert.equal(second.changes.netAfter, netAfterFirst + 1 - 1);
+
+  const stored = (code, type) => db.prepare('SELECT * FROM ledger_change WHERE batch_id = ? AND group_product_code = ? AND change_type = ?').get(second.batchId, code, type);
+  assert.deepEqual([stored('C1', 'cancelled').old_value, stored('C1', 'cancelled').new_value], ['正常在用', '正式销户']);
+  assert.match(stored('C1', 'cancelled').note, /状态时间/);
+  assert.deepEqual([stored('C2', 'fee').old_value, stored('C2', 'fee').new_value], ['100', '200']);
+  assert.equal(db.prepare('SELECT COUNT(*) AS c FROM ledger_change WHERE batch_id = ? AND group_product_code = ?').get(second.batchId, 'C3').c, 0, 'a blank fee keeps the stored one, so nothing changed');
+  assert.match(stored('C4', 'missing').note, /没有这条/);
+  assert.equal(db.prepare('SELECT product_status_name AS s FROM leased_line WHERE group_product_code = ?').get('C4').s, '正常在用', 'a vanished line keeps its data');
+
+  const third = importRows([line('C1', { '产品状态名称': '正式销户', '状态时间': `${year}-03-01` }), line('C2', { '客户经理名称': '乙', '客户经理工号': 'B2', '活动套餐资费': '200' }), line('C3'), line('C4'), line('C5')]);
+  assert.deepEqual(byType(third.batchId), { restored: 1 }, 'an unchanged report records nothing but the line that came back');
+  assert.equal(importRows([line('C1', { '产品状态名称': '正式销户', '状态时间': `${year}-03-01` }), line('C2', { '客户经理名称': '乙', '客户经理工号': 'B2', '活动套餐资费': '200' }), line('C3'), line('C4'), line('C5')]).changes.netBefore, third.changes.netAfter);
+
+  const page = await (await request(`/api/imports/${second.batchId}/changes?limit=2`)).json();
+  assert.equal(page.rows.length, 2);
+  assert.equal(page.hasMore, true);
+  assert.equal(page.summary.netBefore, netAfterFirst);
+  const rest = await (await request(`/api/imports/${second.batchId}/changes?limit=100&before=${page.rows[1].id}`)).json();
+  assert.equal(page.rows.length + rest.rows.length, 6);
+  const onlyCancelled = await (await request(`/api/imports/${second.batchId}/changes?type=cancelled`)).json();
+  assert.deepEqual(onlyCancelled.rows.map((row) => row.group_product_code), ['C1']);
+  assert.equal((await request(`/api/imports/${second.batchId}/changes`, {}, false)).status, 401);
+
+  const lineId = db.prepare('SELECT id FROM leased_line WHERE group_product_code = ?').get('C2').id;
+  const history = await (await request(`/api/ledger/${lineId}/changes`)).json();
+  assert.ok(history.some((row) => row.change_type === 'fee' && row.new_value === '200'));
+  assert.ok(history.some((row) => row.change_type === 'added'));
+
+  const stats = await (await request(`/api/stats?month=${year}-01`)).json();
+  assert.ok(stats.lastImportAt, 'pages can say how current the data is');
+});
+
 test('year and quarter export lists the added and cancelled lines behind the period totals', async () => {
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
   const insert = db.prepare(`INSERT INTO leased_line
@@ -568,6 +637,106 @@ test('KPI achievement counts this year net, matches groups and keeps forecasts',
   assert.equal(next.forecast.added, 0);
   assert.equal(next.forecast.cancelled, 1);
   assert.equal(next.forecasts.length, 2);
+});
+
+test('new lines are offered to the forecast they may answer, and nothing counts until confirmed', async () => {
+  const path = join(tempDir, 'suggest.xlsx');
+  const year = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric' }).format(new Date());
+  const line = (code, values = {}) => ({
+    '集团编码': 'SUG1', '集团名称': '建议集团', '集团产品编码': code, '产品名称': '互联网专线',
+    '产品状态名称': '正常在用', '客户经理名称': '甲', '开始时间': `${year}-02-01`, ...values
+  });
+  const importRows = (rows) => {
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(rows.map((row) => Object.fromEntries(excelHeaders.map((header) => [header, row[header] ?? '']))), { header: excelHeaders }), 'Sheet1');
+    XLSX.writeFile(book, path);
+    return importer.importExcel(path, 'suggest.xlsx');
+  };
+  const overview = async () => (await request('/api/kpi?kpiMode=1')).json();
+  const forecastIn = (data, id) => data.forecasts.find((row) => row.id === id);
+  const create = async (body) => (await (await request('/api/kpi/forecasts', { method: 'POST', body: { group_code: 'SUG1', group_name: '建议集团', manager_name: '甲', month: 11, ...body } })).json()).id;
+  const decide = (id, lineId, action) => request(`/api/kpi/forecasts/${id}/matches`, { method: 'POST', body: { line_id: lineId, action } });
+  const lineIdOf = (code) => db.prepare('SELECT id FROM leased_line WHERE group_product_code = ?').get(code).id;
+
+  importRows([line('OLD1'), line('OLD2')]);
+  const first = await create({ product_type: '互联网专线', line_count: 2 });
+  const second = await create({ product_type: '互联网专线', line_count: 1 });
+  const cancelling = await create({ kind: 'cancelled', product_type: '互联网专线', line_count: 1 });
+  const before = (await overview()).forecast;
+  assert.equal(forecastIn(await overview(), first).suggestions, 0, 'lines already there are not news');
+
+  // The next report: another KPI product is offered with a flag; a non-KPI line and another group's are not.
+  importRows([
+    line('OLD1'),
+    line('OLD2', { '产品状态名称': '正式销户', '状态时间': `${year}-10-01` }),
+    line('NEW1'),
+    line('NEW2', { '产品名称': '传输专线' }),
+    line('NEW3', { '产品名称': '其他产品' }),
+    line('NEW4', { '集团编码': 'SUG2', '集团名称': '别的集团' })
+  ]);
+  let data = await overview();
+  assert.equal(forecastIn(data, first).suggestions, 2);
+  assert.equal(forecastIn(data, second).suggestions, 2);
+  assert.equal(forecastIn(data, cancelling).suggestions, 1);
+  assert.equal(forecastIn(data, first).landed_count, 0, 'nothing lands on its own');
+  assert.deepEqual([data.forecast.added, data.forecast.cancelled], [before.added, before.cancelled], 'suggestions alone change no number');
+
+  const detail = await (await request(`/api/kpi/forecasts/${first}/progress`)).json();
+  assert.deepEqual(Object.fromEntries(detail.suggestions.map((item) => [item.group_product_code, item.sameProduct])), { NEW1: true, NEW2: false });
+
+  assert.equal((await decide(first, lineIdOf('NEW3'), 'confirm')).status, 409, 'only what is on offer can be answered');
+  assert.equal((await decide(first, lineIdOf('NEW1'), 'other')).status, 400);
+  assert.equal((await decide(999999, lineIdOf('NEW1'), 'confirm')).status, 404);
+
+  // Confirming counts one line, leaves a trace, and takes the line off every other forecast.
+  const confirmed = await decide(first, lineIdOf('NEW1'), 'confirm');
+  assert.equal(confirmed.status, 200);
+  const afterConfirm = await confirmed.json();
+  assert.deepEqual([afterConfirm.forecast.landed_count, afterConfirm.forecast.remaining], [1, 1]);
+  assert.match(afterConfirm.forecast.latest_note, /确认落地 1 条：NEW1/);
+  data = await overview();
+  assert.equal(data.forecast.added, before.added - 1);
+  assert.equal(forecastIn(data, second).suggestions, 1, 'NEW2 is still open; NEW1 is taken');
+  assert.equal((await decide(second, lineIdOf('NEW1'), 'confirm')).status, 409, 'a line counts once');
+
+  // Dismissing affects only that forecast.
+  assert.equal((await decide(first, lineIdOf('NEW2'), 'dismiss')).status, 200);
+  data = await overview();
+  assert.equal(forecastIn(data, first).suggestions, 0);
+  assert.equal(forecastIn(data, first).landed_count, 1);
+  assert.equal(forecastIn(data, second).suggestions, 1);
+
+  // A filled forecast stops asking, and answering it is refused.
+  assert.equal((await decide(second, lineIdOf('NEW2'), 'confirm')).status, 200);
+  assert.equal(forecastIn(await overview(), second).suggestions, 0);
+  assert.equal((await decide(second, lineIdOf('NEW2'), 'confirm')).status, 409);
+
+  // A cancellation forecast is offered the line that was cancelled.
+  const cancelDetail = await (await request(`/api/kpi/forecasts/${cancelling}/progress`)).json();
+  assert.deepEqual(cancelDetail.suggestions.map((item) => item.group_product_code), ['OLD2']);
+  const cancelConfirmed = await (await decide(cancelling, lineIdOf('OLD2'), 'confirm')).json();
+  assert.match(cancelConfirmed.forecast.latest_note, /确认销户 1 条：OLD2/);
+
+  // Back to all forecast frees its confirmed lines to be offered again.
+  const restored = await (await request(`/api/kpi/forecasts/${second}`, { method: 'PATCH', body: { landed: false } })).json();
+  assert.equal(restored.landed_count, 0);
+  assert.equal(forecastIn(await overview(), second).suggestions, 1);
+
+  // Through the real upload route the answer says how many are waiting. The route keeps its
+  // upload, so this removes only the one file this request added.
+  const uploads = join(process.cwd(), 'uploads');
+  const existing = new Set(readdirSync(uploads));
+  importRows([line('OLD1'), line('OLD2', { '产品状态名称': '正式销户', '状态时间': `${year}-10-01` }), line('NEW1'), line('NEW2', { '产品名称': '传输专线' }), line('NEW3', { '产品名称': '其他产品' }), line('NEW4', { '集团编码': 'SUG2', '集团名称': '别的集团' })]);
+  const form = new FormData();
+  form.append('file', new Blob([readFileSync(path)]), 'suggest.xlsx');
+  const uploaded = await request('/api/import', { method: 'POST', body: form });
+  for (const name of readdirSync(uploads)) if (!existing.has(name)) rmSync(join(uploads, name), { force: true });
+  assert.equal(uploaded.status, 200);
+  assert.equal((await uploaded.json()).forecastSuggestions, 1);
+
+  assert.equal((await request(`/api/kpi/forecasts/${first}`, { method: 'DELETE' })).status, 200);
+  assert.equal(db.prepare('SELECT COUNT(*) AS c FROM kpi_forecast_match WHERE forecast_id = ?').get(first).c, 0);
+  for (const id of [second, cancelling]) await request(`/api/kpi/forecasts/${id}`, { method: 'DELETE' });
 });
 
 test('existing forecasts marked as landed count as fully landed after the upgrade', () => {

@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { FileSpreadsheet, ListChecks } from 'lucide-react';
 import { isAbort, requestJson } from './api.js';
 import { InlineError } from './components/Feedback.jsx';
-import { displayValue } from './utils.js';
+import ImportChanges from './ImportChanges.jsx';
+import { beijingTime, displayValue } from './utils.js';
 
 function activateOnKey(event, action) {
   if (event.key === 'Enter' || event.key === ' ') {
@@ -20,7 +21,7 @@ function StatusRow({ colSpan, children }) {
 }
 
 // Ledger import batches. Reloads whenever the top bar refreshes or a new ledger file is imported.
-export default function ImportRecords({ refreshToken }) {
+export default function ImportRecords({ refreshToken, onOpenLine }) {
   const [imports, setImports] = useState({ rows: [], loading: true, error: '' });
   const [retry, setRetry] = useState(0);
   const [selectedBatch, setSelectedBatch] = useState(null);
@@ -55,7 +56,7 @@ export default function ImportRecords({ refreshToken }) {
     <main className="page">
       <div className="page-heading">
         <h2>导入记录</h2>
-        <p>台账 Excel 的每次导入；点击一条记录查看逐行处理结果。</p>
+        <p>台账 Excel 的每次导入；点击一条记录查看这次改了什么，以及逐行处理结果。</p>
       </div>
 
       <section className="table-shell">
@@ -92,7 +93,7 @@ export default function ImportRecords({ refreshToken }) {
                   onClick={() => setSelectedBatch(item)}
                   onKeyDown={(event) => activateOnKey(event, () => setSelectedBatch(item))}
                 >
-                  <td>{displayValue(item.imported_at)}</td>
+                  <td>{beijingTime(item.imported_at)}</td>
                   <td>{displayValue(item.file_name)}</td>
                   <td>{displayValue(item.sheet_name)}</td>
                   <td className="num">{displayValue(item.total_rows)}</td>
@@ -109,6 +110,8 @@ export default function ImportRecords({ refreshToken }) {
           </table>
         </div>
       </section>
+
+      {selectedBatch && <ImportChanges batch={selectedBatch} refreshToken={refreshToken} onOpenLine={onOpenLine} />}
 
       {selectedBatch && (
         <section className="table-shell import-detail">

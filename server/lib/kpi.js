@@ -54,7 +54,15 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     created_by TEXT,
     created_at TEXT NOT NULL
   );
-  CREATE INDEX IF NOT EXISTS idx_kpi_forecast_progress_forecast ON kpi_forecast_progress(forecast_id, id);`);
+  CREATE INDEX IF NOT EXISTS idx_kpi_forecast_progress_forecast ON kpi_forecast_progress(forecast_id, id);
+  CREATE TABLE IF NOT EXISTS kpi_forecast_match (
+    forecast_id INTEGER NOT NULL REFERENCES kpi_forecast(id) ON DELETE CASCADE,
+    line_id INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('confirmed', 'dismissed')),
+    decided_by TEXT,
+    decided_at TEXT NOT NULL,
+    PRIMARY KEY (forecast_id, line_id)
+  );`);
   db.exec(`CREATE TABLE IF NOT EXISTS kpi_target (
     year INTEGER PRIMARY KEY,
     net_target INTEGER NOT NULL CHECK(net_target > 0),
@@ -100,7 +108,7 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     return row ? withRemaining(row) : null;
   }
 
-  function saveProgress(id, { note, landedCount, lineCount, username }) {
+  function saveProgress(id, { note, landedCount, lineCount, username, alsoInTransaction }) {
     const now = new Date().toISOString();
     db.exec('BEGIN');
     try {
@@ -110,12 +118,42 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
         db.prepare('INSERT INTO kpi_forecast_progress (forecast_id, note, landed_count, created_by, created_at) VALUES (?, ?, ?, ?, ?)')
           .run(id, note, landedCount, username, now);
       }
+      alsoInTransaction?.(now);
       db.exec('COMMIT');
     } catch (error) {
       db.exec('ROLLBACK');
       throw error;
     }
   }
+
+  /**
+   * Lines a later import brought in (or cancelled) in the forecast's group: likely what it
+   * predicted. Only ever a suggestion for a person to confirm. A line counts once: one confirmed
+   * elsewhere is not offered again, and one dismissed here is not offered here again. Outside the
+   * KPI products a line would not move the KPI, so it is not offered either.
+   */
+  function suggestionsFor(forecast) {
+    if (forecast.remaining <= 0) return [];
+    const statuses = forecast.kind === 'cancelled' ? cancelledStatuses : addedStatuses;
+    return db.prepare(
+      `SELECT l.id AS line_id, l.group_product_code, l.product_name, l.start_time, l.status_time, l.manager_name,
+              COALESCE(l.product_status_name, l.ledger_status, '') AS status, MIN(c.created_at) AS imported_at
+       FROM ledger_change c
+       JOIN leased_line l ON l.id = c.line_id
+       WHERE c.change_type = ? AND c.created_at >= ? AND l.group_code = ?
+         AND l.product_name IN (${placeholders(productTypes)})
+         AND COALESCE(l.product_status_name, l.ledger_status, '') IN (${placeholders(statuses)})
+         AND NOT EXISTS (SELECT 1 FROM kpi_forecast_match m WHERE m.line_id = l.id AND m.status = 'confirmed')
+         AND NOT EXISTS (SELECT 1 FROM kpi_forecast_match m WHERE m.line_id = l.id AND m.forecast_id = ?)
+       GROUP BY l.id
+       ORDER BY imported_at ASC, l.id ASC`
+    ).all(forecast.kind, forecast.created_at, forecast.group_code, ...productTypes, ...statuses, forecast.id)
+      .map((line) => ({ ...line, sameProduct: line.product_name === forecast.product_type }));
+  }
+
+  /** Forecasts with something to look at, for the notice after an import. */
+  router.countSuggestions = () => forecastRows(currentPeriod().year)
+    .reduce((sum, forecast) => sum + Math.min(suggestionsFor(forecast).length, forecast.remaining), 0);
 
   router.get('/', (req, res) => {
     const period = currentPeriod();
@@ -135,7 +173,7 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
 
     const added = managers.reduce((sum, row) => sum + row.added, 0);
     const cancelled = managers.reduce((sum, row) => sum + row.cancelled, 0);
-    const forecasts = forecastRows(period.year);
+    const forecasts = forecastRows(period.year).map((row) => ({ ...row, suggestions: suggestionsFor(row).length }));
     const pending = forecasts.filter((row) => !row.landed);
     const total = (rows) => rows.reduce((sum, row) => sum + row.remaining, 0);
     const byMonth = Object.fromEntries(forecastMonths.map((month) => {
@@ -151,6 +189,7 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
 
     res.json({
       year: period.year,
+      lastImportAt: db.prepare("SELECT MAX(imported_at) AS at FROM import_batch WHERE status = 'finished'").get().at ?? null,
       target: targetFor(period.year),
       defaultTarget: annualNetTarget,
       months: forecastMonths,
@@ -240,6 +279,7 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     let lineCount = existing.line_count;
     let landedCount = existing.landed_count;
     let note = '';
+    let restoring = false;
     if (Object.hasOwn(body, 'line_count')) {
       lineCount = Number(body.line_count);
       if (!Number.isSafeInteger(lineCount) || lineCount <= 0) return res.status(400).json({ error: '预计条数须为正整数' });
@@ -249,10 +289,20 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     if (Object.hasOwn(body, 'landed')) {
       if (typeof body.landed !== 'boolean') return res.status(400).json({ error: '落地状态不正确' });
       landedCount = body.landed ? lineCount : 0;
+      restoring = !body.landed;
       const doneWord = existing.kind === 'cancelled' ? '全部销户' : '全部落地';
       if (landedCount !== existing.landed_count) note = body.landed ? `标记为${doneWord}` : '恢复为预计';
     }
-    saveProgress(id, { note, landedCount, lineCount, username: currentUser(req)?.username || '' });
+    saveProgress(id, {
+      note,
+      landedCount,
+      lineCount,
+      username: currentUser(req)?.username || '',
+      // Back to all forecast: lines confirmed for it are free to be suggested again.
+      alsoInTransaction: () => {
+        if (restoring) db.prepare("DELETE FROM kpi_forecast_match WHERE forecast_id = ? AND status = 'confirmed'").run(id);
+      }
+    });
     res.json(forecastRow(id));
   });
 
@@ -264,7 +314,37 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     const entries = db.prepare(
       'SELECT id, note, landed_count, created_by, created_at FROM kpi_forecast_progress WHERE forecast_id = ? ORDER BY id DESC'
     ).all(id);
-    res.json({ forecast, entries });
+    res.json({ forecast, entries, suggestions: suggestionsFor(forecast) });
+  });
+
+  // A person's answer to one suggestion. Only what is currently on offer can be answered.
+  router.post('/forecasts/:id/matches', (req, res) => {
+    const id = Number(req.params.id);
+    const lineId = Number(req.body?.line_id);
+    const action = req.body?.action;
+    if (!Number.isSafeInteger(id) || id <= 0 || !Number.isSafeInteger(lineId) || lineId <= 0) return res.status(400).json({ error: '记录不正确' });
+    if (!['confirm', 'dismiss'].includes(action)) return res.status(400).json({ error: '操作不正确' });
+    const forecast = forecastRow(id);
+    if (!forecast) return res.status(404).json({ error: '预计记录不存在' });
+    const line = suggestionsFor(forecast).find((item) => item.line_id === lineId);
+    if (!line) return res.status(409).json({ error: '这条建议已经不存在，请刷新后再看' });
+    const username = currentUser(req)?.username || '';
+    const saveMatch = (status, at) => db.prepare(
+      'INSERT INTO kpi_forecast_match (forecast_id, line_id, status, decided_by, decided_at) VALUES (?, ?, ?, ?, ?)'
+    ).run(id, lineId, status, username, at);
+    if (action === 'dismiss') {
+      saveMatch('dismissed', new Date().toISOString());
+    } else {
+      const word = forecast.kind === 'cancelled' ? '销户' : '落地';
+      saveProgress(id, {
+        note: `确认${word} 1 条：${line.group_product_code}（${line.product_name}）`,
+        landedCount: forecast.landed_count + 1,
+        lineCount: forecast.line_count,
+        username,
+        alsoInTransaction: (at) => saveMatch('confirmed', at)
+      });
+    }
+    res.json({ forecast: forecastRow(id), suggestions: suggestionsFor(forecastRow(id)) });
   });
 
   // The time is the server's own, so a phone with a wrong clock cannot misdate an update.
