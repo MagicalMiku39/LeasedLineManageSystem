@@ -1,12 +1,12 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import XLSX from 'xlsx';
 import { createKpiRouter } from '../server/lib/kpi.js';
+import XLSX from '../server/lib/xlsx.js';
 
 const tempDir = mkdtempSync(join(tmpdir(), 'ledger-tests-'));
 process.env.LEDGER_DB_PATH = join(tempDir, 'test.db');
@@ -258,6 +258,36 @@ test('security log records logins and locks, never secrets, and stays out of rea
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM security_log WHERE id = ?').get(all[0].id).count, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM security_log').get().count, all.length - 1);
   db.exec('DELETE FROM auth_attempt');
+});
+
+test('ledger upload refuses oversized files with a readable error and keeps nothing', async () => {
+  const uploads = join(process.cwd(), 'uploads');
+  const before = readdirSync(uploads).length;
+  const form = new FormData();
+  form.append('file', new Blob([Buffer.alloc(32 * 1024 * 1024 + 1)]), 'big.xlsx');
+  const response = await request('/api/import', { method: 'POST', body: form });
+  assert.equal(response.status, 413);
+  assert.match((await response.json()).error, /不能超过 32 MB/);
+  assert.equal(readdirSync(uploads).length, before);
+
+  const unauthenticated = new FormData();
+  unauthenticated.append('file', new Blob(['x']), 'a.xlsx');
+  assert.equal((await request('/api/import', { method: 'POST', body: unauthenticated }, false)).status, 401);
+});
+
+test('the Excel library is the patched release, reads files, and keeps codes and legacy text intact', () => {
+  assert.ok(XLSX.version.startsWith('0.20.'), 'the patched SheetJS release, not the one published on npm');
+
+  const file = join(tempDir, 'round-trip.xlsx');
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet([{ 集团编码: '00123', 金额: 0, 文本日期: '2026-11-02', 空: '' }]), 'S');
+  XLSX.writeFile(book, file);
+  const back = XLSX.readFile(file, { cellDates: true });
+  assert.deepEqual(XLSX.utils.sheet_to_json(back.Sheets.S, { defval: '', raw: false }), [{ 集团编码: '00123', 金额: '0', 文本日期: '2026-11-02', 空: '' }]);
+
+  // Older files store text in a codepage; without its tables, GBK bytes for 集团 come back garbled.
+  const gbk = XLSX.read(Buffer.from([0xbc, 0xaf, 0xcd, 0xc5]), { type: 'buffer', codepage: 936 });
+  assert.deepEqual(XLSX.utils.sheet_to_json(gbk.Sheets[gbk.SheetNames[0]], { header: 1 }), [['集团']]);
 });
 
 test('Excel import inserts and updates rows while preserving blank package fee', () => {

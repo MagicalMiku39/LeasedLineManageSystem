@@ -1,7 +1,6 @@
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
-import XLSX from 'xlsx';
 import http from 'node:http';
 import https from 'node:https';
 import { existsSync, readFileSync } from 'node:fs';
@@ -11,6 +10,7 @@ import { pathToFileURL } from 'node:url';
 import { db, nowIso } from './lib/db.js';
 import { editableFields } from './lib/field-map.js';
 import { importExcel } from './lib/import-excel.js';
+import XLSX from './lib/xlsx.js';
 import { createRevenueRouter } from './lib/revenue.js';
 import { createWarningsRouter } from './lib/warnings.js';
 import { createKpiRouter } from './lib/kpi.js';
@@ -45,7 +45,20 @@ if (httpsEnabled && process.env.AUTH_COOKIE_SECURE === undefined) {
 
 mkdirSync(uploadDir, { recursive: true });
 
-const upload = multer({ dest: uploadDir });
+const maxLedgerUploadMb = 32;
+const upload = multer({ dest: uploadDir, limits: { fileSize: maxLedgerUploadMb * 1024 * 1024, files: 1 } });
+
+// Answers an upload the server refuses in the same JSON form as every other import error.
+function receiveLedgerFile(req, res, next) {
+  upload.single('file')(req, res, (error) => {
+    if (!error) {
+      next();
+      return;
+    }
+    const tooLarge = error.code === 'LIMIT_FILE_SIZE';
+    res.status(tooLarge ? 413 : 400).json({ error: tooLarge ? `文件不能超过 ${maxLedgerUploadMb} MB` : `文件上传失败：${error.message}` });
+  });
+}
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
@@ -397,7 +410,7 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, time: nowIso() });
 });
 
-app.post('/api/import', upload.single('file'), (req, res) => {
+app.post('/api/import', receiveLedgerFile, (req, res) => {
   if (!req.file) {
     res.status(400).json({ error: '请上传 Excel 文件' });
     return;

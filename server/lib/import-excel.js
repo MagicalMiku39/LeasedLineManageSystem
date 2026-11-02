@@ -1,4 +1,4 @@
-import XLSX from 'xlsx';
+import XLSX from './xlsx.js';
 import { db, makeBatchId, nowIso } from './db.js';
 import { excelFieldMap, excelHeaders } from './field-map.js';
 

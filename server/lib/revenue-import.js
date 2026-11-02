@@ -1,4 +1,4 @@
-import XLSX from 'xlsx';
+import XLSX from './xlsx.js';
 import { createHash } from 'node:crypto';
 import { addCents, fail, money, netCents, productTaxRate, toCents, validMonth } from './revenue-money.js';
 
