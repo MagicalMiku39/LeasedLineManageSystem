@@ -14,13 +14,18 @@ import { importExcel } from './lib/import-excel.js';
 import { createRevenueRouter } from './lib/revenue.js';
 import { createWarningsRouter } from './lib/warnings.js';
 import { createKpiRouter } from './lib/kpi.js';
+import { clientCertPaths, createClientCertListener, requestSource } from './lib/client-cert.js';
+import { readClientCertSettings } from './lib/client-cert-admin.js';
+import { createClientCertRouter } from './lib/client-cert-router.js';
+import { logSecurityEvent, securityLogHandler } from './lib/security-log.js';
 import {
   authStatus,
   currentUser,
   loginAuth,
   logoutAuth,
   requireAuth,
-  setupAuth
+  setupAuth,
+  verifyUserCode
 } from './lib/auth.js';
 
 const app = express();
@@ -59,11 +64,12 @@ app.post('/api/auth/setup', (req, res) => {
 
 app.post('/api/auth/login', (req, res) => {
   try {
-    const result = loginAuth(req.body || {});
+    const result = loginAuth(req.body || {}, requestSource(req));
     res.setHeader('Set-Cookie', result.cookie);
     res.json({ user: result.user });
   } catch (error) {
-    res.status(401).json({ error: error.message });
+    if (error.status) console.warn(`Login locked from ${requestSource(req)}`);
+    res.status(error.status || 401).json({ error: error.message });
   }
 });
 
@@ -940,6 +946,16 @@ app.get('/api/stats', (req, res) => {
 
 app.use('/api/revenue', createRevenueRouter({ db, uploadDir, leasedLineSource }));
 app.use('/api/warnings', createWarningsRouter({ db, leasedLineSource, currentUser }));
+const clientCertFiles = clientCertPaths();
+const clientCertListener = createClientCertListener({ app, paths: clientCertFiles });
+app.use('/api/settings/client-certs', createClientCertRouter({
+  paths: clientCertFiles,
+  listener: clientCertListener,
+  currentUser,
+  verifyCode: verifyUserCode,
+  logEvent: logSecurityEvent
+}));
+app.get('/api/settings/security-log', securityLogHandler);
 app.use('/api/kpi', createKpiRouter({
   db,
   leasedLineSource,
@@ -967,6 +983,19 @@ if (httpsEnabled) {
   server.listen(port, host, () => {
     console.log(`HTTPS server listening on https://${host}:${port}`);
   });
+
+  clientCertListener.configure({
+    tls: httpsOptions,
+    host,
+    reservedPorts: [port, Number(process.env.HTTP_REDIRECT_PORT)].filter(Boolean)
+  });
+  const clientCertSettings = readClientCertSettings(clientCertFiles);
+  if (clientCertSettings.enabled) {
+    // A problem here must not take the main port down: this port simply stays closed.
+    clientCertListener.start(clientCertSettings.port)
+      .then(() => console.log(`Client certificate HTTPS listening on https://${host}:${clientCertSettings.port}`))
+      .catch((error) => console.error(`Client certificate port not started: ${error.message}`));
+  }
 
   if (process.env.HTTP_REDIRECT_PORT) {
     const redirectPort = Number(process.env.HTTP_REDIRECT_PORT);

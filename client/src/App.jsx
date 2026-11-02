@@ -16,6 +16,7 @@ import { useColumnSettings } from './ledger/useColumnSettings.js';
 import { useLedger, useLedgerOptions, useLedgerStats } from './ledger/useLedgerData.js';
 import ManagerDashboard, { useManagerPerformance } from './ManagerDashboard.jsx';
 import Operations from './Operations.jsx';
+import Settings from './Settings.jsx';
 import { beijingMonth } from './utils.js';
 
 const refreshTitles = {
@@ -23,7 +24,8 @@ const refreshTitles = {
   managers: '重新统计客户经理净增',
   revenue: '重新读取收入数据',
   operations: '重新读取运营中心当前页面',
-  imports: '重新读取导入记录'
+  imports: '重新读取导入记录',
+  settings: '重新读取设置'
 };
 
 function App() {
@@ -60,6 +62,7 @@ function App() {
   const [revenueRevision, setRevenueRevision] = useState(0);
   const [operationsRevision, setOperationsRevision] = useState(0);
   const [importsRevision, setImportsRevision] = useState(0);
+  const [settingsRevision, setSettingsRevision] = useState(0);
   const [revenueExportReady, setRevenueExportReady] = useState(false);
 
   async function loadAuthStatus() {
@@ -189,6 +192,10 @@ function App() {
       revenueActions.current?.refresh();
       return;
     }
+    if (activeView === 'settings') {
+      setSettingsRevision((value) => value + 1);
+      return;
+    }
     reloadLedgerPage();
     reloadOptions();
     if (activeView === 'managers') managerPerformance.reload();
@@ -224,6 +231,8 @@ function App() {
         );
       case 'imports':
         return <ImportRecords refreshToken={importsRevision} />;
+      case 'settings':
+        return <Settings refreshToken={settingsRevision} />;
       case 'managers':
         return (
           <ManagerDashboard

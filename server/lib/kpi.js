@@ -8,6 +8,7 @@ export const forecastMonths = [11, 12];
 export const forecastKinds = ['added', 'cancelled'];
 
 const groupMatchLimit = 20;
+const maxProgressNote = 500;
 
 function placeholders(values) {
   return values.map(() => '?').join(', ');
@@ -40,6 +41,20 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
   if (!forecastColumns.includes('kind')) {
     db.exec("ALTER TABLE kpi_forecast ADD COLUMN kind TEXT NOT NULL DEFAULT 'added'");
   }
+  // Tables from before partial progress: a forecast marked as landed had landed in full.
+  if (!forecastColumns.includes('landed_count')) {
+    db.exec(`ALTER TABLE kpi_forecast ADD COLUMN landed_count INTEGER NOT NULL DEFAULT 0;
+      UPDATE kpi_forecast SET landed_count = line_count WHERE landed = 1;`);
+  }
+  db.exec(`CREATE TABLE IF NOT EXISTS kpi_forecast_progress (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    forecast_id INTEGER NOT NULL REFERENCES kpi_forecast(id) ON DELETE CASCADE,
+    note TEXT NOT NULL,
+    landed_count INTEGER,
+    created_by TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_kpi_forecast_progress_forecast ON kpi_forecast_progress(forecast_id, id);`);
   db.exec(`CREATE TABLE IF NOT EXISTS kpi_target (
     year INTEGER PRIMARY KEY,
     net_target INTEGER NOT NULL CHECK(net_target > 0),
@@ -64,11 +79,42 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     ).get(groupCode) || null;
   }
 
+  const forecastSelect = `SELECT f.id, f.year, f.month, f.kind, f.group_code, f.group_name, f.manager_name, f.product_type,
+      f.line_count, f.landed_count, f.created_at, f.updated_at,
+      (SELECT note FROM kpi_forecast_progress p WHERE p.forecast_id = f.id ORDER BY p.id DESC LIMIT 1) AS latest_note,
+      (SELECT created_at FROM kpi_forecast_progress p WHERE p.forecast_id = f.id ORDER BY p.id DESC LIMIT 1) AS latest_at
+    FROM kpi_forecast f`;
+
+  // Only the part not yet in the ledger still counts as a forecast.
+  function withRemaining(row) {
+    const remaining = Math.max(row.line_count - row.landed_count, 0);
+    return { ...row, remaining, landed: remaining === 0 };
+  }
+
   function forecastRows(year) {
-    return db.prepare(
-      `SELECT id, year, month, kind, group_code, group_name, manager_name, product_type, line_count, landed, created_at, updated_at
-       FROM kpi_forecast WHERE year = ? ORDER BY month ASC, kind ASC, id ASC`
-    ).all(year).map((row) => ({ ...row, landed: row.landed === 1 }));
+    return db.prepare(`${forecastSelect} WHERE f.year = ? ORDER BY f.month ASC, f.kind ASC, f.id ASC`).all(year).map(withRemaining);
+  }
+
+  function forecastRow(id) {
+    const row = db.prepare(`${forecastSelect} WHERE f.id = ?`).get(id);
+    return row ? withRemaining(row) : null;
+  }
+
+  function saveProgress(id, { note, landedCount, lineCount, username }) {
+    const now = new Date().toISOString();
+    db.exec('BEGIN');
+    try {
+      db.prepare('UPDATE kpi_forecast SET line_count = ?, landed_count = ?, landed = ?, updated_at = ? WHERE id = ?')
+        .run(lineCount, landedCount, landedCount >= lineCount ? 1 : 0, now, id);
+      if (note) {
+        db.prepare('INSERT INTO kpi_forecast_progress (forecast_id, note, landed_count, created_by, created_at) VALUES (?, ?, ?, ?, ?)')
+          .run(id, note, landedCount, username, now);
+      }
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   router.get('/', (req, res) => {
@@ -91,7 +137,7 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     const cancelled = managers.reduce((sum, row) => sum + row.cancelled, 0);
     const forecasts = forecastRows(period.year);
     const pending = forecasts.filter((row) => !row.landed);
-    const total = (rows) => rows.reduce((sum, row) => sum + row.line_count, 0);
+    const total = (rows) => rows.reduce((sum, row) => sum + row.remaining, 0);
     const byMonth = Object.fromEntries(forecastMonths.map((month) => {
       const inMonth = pending.filter((row) => row.month === month);
       return [month, {
@@ -192,18 +238,54 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     if (!existing) return res.status(404).json({ error: '预计记录不存在' });
     const body = req.body || {};
     let lineCount = existing.line_count;
-    let landed = existing.landed;
+    let landedCount = existing.landed_count;
+    let note = '';
     if (Object.hasOwn(body, 'line_count')) {
       lineCount = Number(body.line_count);
       if (!Number.isSafeInteger(lineCount) || lineCount <= 0) return res.status(400).json({ error: '预计条数须为正整数' });
+      if (lineCount < landedCount) return res.status(400).json({ error: `已落地 ${landedCount} 条，预计条数不能更少` });
     }
+    // The one-click shortcut: everything landed, or back to all forecast. It leaves a trace too.
     if (Object.hasOwn(body, 'landed')) {
       if (typeof body.landed !== 'boolean') return res.status(400).json({ error: '落地状态不正确' });
-      landed = body.landed ? 1 : 0;
+      landedCount = body.landed ? lineCount : 0;
+      const doneWord = existing.kind === 'cancelled' ? '全部销户' : '全部落地';
+      if (landedCount !== existing.landed_count) note = body.landed ? `标记为${doneWord}` : '恢复为预计';
     }
-    db.prepare('UPDATE kpi_forecast SET line_count = ?, landed = ?, updated_at = ? WHERE id = ?')
-      .run(lineCount, landed, new Date().toISOString(), id);
-    res.json(db.prepare('SELECT * FROM kpi_forecast WHERE id = ?').get(id));
+    saveProgress(id, { note, landedCount, lineCount, username: currentUser(req)?.username || '' });
+    res.json(forecastRow(id));
+  });
+
+  router.get('/forecasts/:id/progress', (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: '预计记录不正确' });
+    const forecast = forecastRow(id);
+    if (!forecast) return res.status(404).json({ error: '预计记录不存在' });
+    const entries = db.prepare(
+      'SELECT id, note, landed_count, created_by, created_at FROM kpi_forecast_progress WHERE forecast_id = ? ORDER BY id DESC'
+    ).all(id);
+    res.json({ forecast, entries });
+  });
+
+  // The time is the server's own, so a phone with a wrong clock cannot misdate an update.
+  router.post('/forecasts/:id/progress', (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: '预计记录不正确' });
+    const existing = db.prepare('SELECT * FROM kpi_forecast WHERE id = ?').get(id);
+    if (!existing) return res.status(404).json({ error: '预计记录不存在' });
+    const note = String(req.body?.note ?? '').trim();
+    if (!note) return res.status(400).json({ error: '请填写进展说明' });
+    if (note.length > maxProgressNote) return res.status(400).json({ error: `进展说明不能超过 ${maxProgressNote} 字` });
+    let landedCount = existing.landed_count;
+    const given = req.body?.landed_count;
+    if (given !== undefined && given !== null && given !== '') {
+      landedCount = Number(given);
+      if (!Number.isSafeInteger(landedCount) || landedCount < 0 || landedCount > existing.line_count) {
+        return res.status(400).json({ error: `已落地条数须为 0–${existing.line_count} 的整数` });
+      }
+    }
+    saveProgress(id, { note, landedCount, lineCount: existing.line_count, username: currentUser(req)?.username || '' });
+    res.status(201).json(forecastRow(id));
   });
 
   router.delete('/forecasts/:id', (req, res) => {

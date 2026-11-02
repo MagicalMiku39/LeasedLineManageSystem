@@ -2,9 +2,10 @@ import React, { useEffect, useImperativeHandle, useMemo, useState } from 'react'
 import { Check, ListChecks, Pencil, Plus, Trash2, Undo2, UsersRound } from 'lucide-react';
 import { isAbort, jsonBody, requestJson } from './api.js';
 import { InlineError } from './components/Feedback.jsx';
-import { kpiManagerRows } from './kpiRows.js';
+import KpiProgress from './KpiProgress.jsx';
+import { forecastState, kpiManagerRows } from './kpiRows.js';
 import { defaultManagers } from './ledger/config.js';
-import { netClass, signedNumber } from './utils.js';
+import { beijingTime, netClass, signedNumber } from './utils.js';
 
 const emptyForm = { kind: 'added', group_code: '', group_name: '', manager_name: '', product_type: '', line_count: '', month: '' };
 const kindLabels = { added: '新增', cancelled: '销户' };
@@ -62,6 +63,7 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken }) {
   const [targetDraft, setTargetDraft] = useState(null);
   const [targetError, setTargetError] = useState('');
   const [targetSaving, setTargetSaving] = useState(false);
+  const [progressId, setProgressId] = useState(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -116,8 +118,9 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken }) {
         }))), '客户经理净增');
         XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(forecasts.map((row) => ({
           预计类别: kindLabels[row.kind], 月份: `${row.month}月`, 集团编码: row.group_code, 集团名称: row.group_name, 客户经理: row.manager_name,
-          产品类型: row.product_type, 条数: row.line_count, 状态: row.landed ? landedLabels[row.kind] : '预计'
-        })), { header: ['预计类别', '月份', '集团编码', '集团名称', '客户经理', '产品类型', '条数', '状态'] }), '预计新增与销户');
+          产品类型: row.product_type, 条数: row.line_count, 已落地条数: row.landed_count, 状态: forecastState(row),
+          最新进展: row.latest_note || '', 进展更新时间: row.latest_at ? beijingTime(row.latest_at) : ''
+        })), { header: ['预计类别', '月份', '集团编码', '集团名称', '客户经理', '产品类型', '条数', '已落地条数', '状态', '最新进展', '进展更新时间'] }), '预计新增与销户');
         XLSX.writeFile(book, `KPI达成-${data.year}.xlsx`);
       } catch (err) { setError(`导出失败：${err.message}`); }
     }
@@ -400,12 +403,27 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken }) {
                   <th>客户经理</th>
                   <th>类型</th>
                   <th className="num">条数</th>
+                  <th className="num">已落地</th>
+                  <th>最新进展</th>
+                  <th>更新时间</th>
                   <th>操作</th>
                 </tr>
               </thead>
               <tbody>
                 {!loading && forecasts.map((row) => (
-                  <tr key={row.id} className={row.landed ? 'kpi-landed' : undefined}>
+                  <tr
+                    key={row.id}
+                    className={`kpi-forecast-row${row.landed ? ' kpi-landed' : ''}`}
+                    tabIndex={0}
+                    title="查看和更新进展"
+                    onClick={() => setProgressId(row.id)}
+                    onKeyDown={(event) => {
+                      if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+                        event.preventDefault();
+                        setProgressId(row.id);
+                      }
+                    }}
+                  >
                     <td className={row.landed ? undefined : row.kind === 'cancelled' ? 'kpi-cancelled' : 'kpi-added'}>{kindLabels[row.kind]}</td>
                     <td>{row.month}月</td>
                     <td>{row.group_code}</td>
@@ -413,7 +431,10 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken }) {
                     <td>{row.manager_name}</td>
                     <td>{row.product_type}</td>
                     <td className="num">{row.line_count}</td>
-                    <td>
+                    <td className="num">{row.landed_count}</td>
+                    <td className="kpi-latest-note" title={row.latest_note || undefined}>{row.latest_note || '—'}</td>
+                    <td>{row.latest_at ? beijingTime(row.latest_at) : '—'}</td>
+                    <td onClick={(event) => event.stopPropagation()}>
                       <div className="kpi-row-actions">
                         <button
                           type="button"
@@ -440,15 +461,16 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken }) {
                 ))}
                 {(loading || forecasts.length === 0) && (
                   <tr className="state-row">
-                    <td colSpan="8" className="empty">{loading ? '正在加载…' : '暂无预计新增或销户，可在上方填写'}</td>
+                    <td colSpan="11" className="empty">{loading ? '正在加载…' : '暂无预计新增或销户，可在上方填写'}</td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
-          <p className="operations-rule">预计年度净增 = 当前净增 + 预计新增 − 预计销户，只计尚未落地的预计。专线实际开通或销户、已体现在台账中后，请点“已落地”或“已销户”，避免重复计算。</p>
+          <p className="operations-rule">预计年度净增 = 当前净增 + 预计新增 − 预计销户，只计尚未落地的条数。点击一行可以查看和更新进展；专线实际开通或销户、已体现在台账中后，请填写已落地条数，或点“已落地”“已销户”表示全部完成，避免重复计算。</p>
         </section>
       </div>
+      {progressId !== null && <KpiProgress forecastId={progressId} onClose={() => setProgressId(null)} onChanged={reload} />}
     </>
   );
 }

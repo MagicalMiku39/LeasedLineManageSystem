@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { db, nowIso } from './db.js';
+import { logSecurityEvent } from './security-log.js';
 
 const issuer = 'LeasedLineManageSystem';
 const sessionDays = 7;
@@ -24,7 +25,59 @@ CREATE TABLE IF NOT EXISTS auth_session (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(user_id) REFERENCES auth_user(id)
 );
+
+CREATE TABLE IF NOT EXISTS auth_attempt (
+  attempt_key TEXT PRIMARY KEY,
+  failures INTEGER NOT NULL,
+  locked_until TEXT,
+  updated_at TEXT NOT NULL
+);
 `);
+
+const maxFailures = 5;
+const lockMinutes = 15;
+const lockMs = lockMinutes * 60 * 1000;
+// Compared against when the account does not exist, so its absence takes just as long to report.
+const unknownUserSalt = 'unknown-user';
+
+/** Too many wrong passwords or codes from one source; `status` is the HTTP status to answer with. */
+export class AuthLockedError extends Error {
+  constructor(minutes) {
+    super(`尝试次数过多，请 ${minutes} 分钟后再试`);
+    this.status = 429;
+  }
+}
+
+// Counted per source, not per account alone: someone holding a stolen device certificate can
+// use up only that certificate's tries, and cannot lock the administrator out of the page where
+// the certificate gets revoked.
+function attemptKey(username, source) {
+  return `${String(username || '').trim()}|${source}`;
+}
+
+function assertNotLocked(key) {
+  const row = db.prepare('SELECT locked_until FROM auth_attempt WHERE attempt_key = ?').get(key);
+  const remaining = row?.locked_until ? new Date(row.locked_until).getTime() - Date.now() : 0;
+  if (remaining > 0) throw new AuthLockedError(Math.ceil(remaining / 60000));
+}
+
+function recordFailure(key) {
+  const now = Date.now();
+  db.prepare('DELETE FROM auth_attempt WHERE updated_at < ?').run(new Date(now - 24 * 60 * 60 * 1000).toISOString());
+  const row = db.prepare('SELECT failures, updated_at FROM auth_attempt WHERE attempt_key = ?').get(key);
+  const recent = row && now - new Date(row.updated_at).getTime() < lockMs;
+  const failures = recent ? row.failures + 1 : 1;
+  const lockedUntil = failures >= maxFailures ? new Date(now + lockMs).toISOString() : null;
+  db.prepare(
+    `INSERT INTO auth_attempt (attempt_key, failures, locked_until, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(attempt_key) DO UPDATE SET failures = excluded.failures, locked_until = excluded.locked_until, updated_at = excluded.updated_at`
+  ).run(key, failures, lockedUntil, new Date(now).toISOString());
+  return Boolean(lockedUntil);
+}
+
+function clearFailures(key) {
+  db.prepare('DELETE FROM auth_attempt WHERE attempt_key = ?').run(key);
+}
 
 function base32Encode(buffer) {
   let bits = '';
@@ -127,12 +180,21 @@ export function setupAuth({ username, password }) {
   return { username: normalizedUsername, totpSecret: secret, otpauthUrl };
 }
 
-export function loginAuth({ username, password, code }) {
+export function loginAuth({ username, password, code }, source = '') {
+  const key = attemptKey(username, source);
+  assertNotLocked(key);
   const user = db.prepare('SELECT * FROM auth_user WHERE username = ?').get(String(username || '').trim());
-  if (!user) throw new Error('账号、密码或验证码错误');
-  const { hash } = hashPassword(password || '', user.password_salt);
-  if (!timingSafeEqualText(hash, user.password_hash)) throw new Error('账号、密码或验证码错误');
-  if (!verifyTotp(user.totp_secret, code)) throw new Error('账号、密码或验证码错误');
+  const { hash } = hashPassword(password || '', user?.password_salt || unknownUserSalt);
+  if (!user || !timingSafeEqualText(hash, user.password_hash) || !verifyTotp(user.totp_secret, code)) {
+    const locked = recordFailure(key);
+    // An unknown name is not written down: people sometimes type their password in that box.
+    const entry = { username: user?.username || '', source, detail: user ? '' : '账号不存在' };
+    logSecurityEvent('login_failed', entry);
+    if (locked) logSecurityEvent('login_locked', { ...entry, detail: `连续错误 ${maxFailures} 次，锁定 ${lockMinutes} 分钟` });
+    throw new Error('账号、密码或验证码错误');
+  }
+  clearFailures(key);
+  logSecurityEvent('login_success', { username: user.username, source });
 
   const token = crypto.randomBytes(32).toString('base64url');
   const expiresAt = new Date(Date.now() + sessionDays * 24 * 60 * 60 * 1000);
@@ -145,6 +207,21 @@ export function loginAuth({ username, password, code }) {
     user: { username: user.username },
     cookie: makeSessionCookie(token, expiresAt)
   };
+}
+
+/** Asks for the authenticator again before a sensitive action, on top of the login session. */
+export function verifyUserCode(username, code, source = '') {
+  const key = attemptKey(username, source);
+  assertNotLocked(key);
+  const user = db.prepare('SELECT totp_secret FROM auth_user WHERE username = ?').get(String(username || ''));
+  if (!user || !verifyTotp(user.totp_secret, code)) {
+    const locked = recordFailure(key);
+    logSecurityEvent('code_failed', { username: String(username || ''), source });
+    if (locked) logSecurityEvent('code_locked', { username: String(username || ''), source, detail: `连续错误 ${maxFailures} 次，锁定 ${lockMinutes} 分钟` });
+    return false;
+  }
+  clearFailures(key);
+  return true;
 }
 
 export function logoutAuth(req, res) {

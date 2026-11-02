@@ -4,13 +4,16 @@ import crypto from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import XLSX from 'xlsx';
+import { createKpiRouter } from '../server/lib/kpi.js';
 
 const tempDir = mkdtempSync(join(tmpdir(), 'ledger-tests-'));
 process.env.LEDGER_DB_PATH = join(tempDir, 'test.db');
 
 const { db, makeBatchId, nowIso } = await import('../server/lib/db.js');
 const auth = await import('../server/lib/auth.js');
+const securityLog = await import('../server/lib/security-log.js');
 const importer = await import('../server/lib/import-excel.js');
 const { excelHeaders } = await import('../server/lib/field-map.js');
 const serverModule = await import('../server/index.js');
@@ -152,6 +155,109 @@ test('authentication setup, login, session lookup and logout are enforced', asyn
   assert.deepEqual((await status.json()).user, { username: 'admin' });
   const unauthenticated = await request('/api/health', {}, false);
   assert.equal(unauthenticated.status, 401);
+});
+
+test('repeated failures lock only the source they came from, then expire', async () => {
+  const secret = db.prepare('SELECT totp_secret FROM auth_user WHERE username = ?').get('admin').totp_secret;
+  const right = () => ({ username: 'admin', password: 'password1', code: totp(secret) });
+  const wrong = { username: 'admin', password: 'wrongpass', code: '000000' };
+  db.exec('DELETE FROM auth_attempt');
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    assert.throws(() => auth.loginAuth(wrong, 'ip:attacker'), /账号、密码或验证码错误/);
+  }
+  assert.throws(() => auth.loginAuth(right(), 'ip:attacker'), { status: 429, message: /尝试次数过多/ });
+  assert.equal(auth.loginAuth(right(), 'ip:company').user.username, 'admin', 'another source can still log in');
+
+  // A correct login clears earlier mistakes.
+  for (let attempt = 0; attempt < 4; attempt += 1) assert.throws(() => auth.loginAuth(wrong, 'ip:typo'));
+  auth.loginAuth(right(), 'ip:typo');
+  for (let attempt = 0; attempt < 4; attempt += 1) assert.throws(() => auth.loginAuth(wrong, 'ip:typo'));
+  assert.equal(auth.loginAuth(right(), 'ip:typo').user.username, 'admin');
+
+  // Unknown accounts answer the same way and lock too.
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    assert.throws(() => auth.loginAuth({ ...wrong, username: 'nobody' }, 'ip:scan'), /账号、密码或验证码错误/);
+  }
+  assert.throws(() => auth.loginAuth({ ...wrong, username: 'nobody' }, 'ip:scan'), { status: 429 });
+
+  // The extra authenticator check shares the limit.
+  for (let attempt = 0; attempt < 5; attempt += 1) assert.equal(auth.verifyUserCode('admin', '000000', 'cert:AA'), false);
+  assert.throws(() => auth.verifyUserCode('admin', totp(secret), 'cert:AA'), { status: 429 });
+  assert.equal(auth.verifyUserCode('admin', totp(secret), 'ip:company'), true);
+
+  // The lock runs out on its own, and the count starts over.
+  const past = new Date(Date.now() - 16 * 60 * 1000).toISOString();
+  db.prepare('UPDATE auth_attempt SET locked_until = ?, updated_at = ?').run(past, past);
+  assert.throws(() => auth.loginAuth(wrong, 'ip:attacker'), /账号、密码或验证码错误/);
+  assert.equal(db.prepare('SELECT failures FROM auth_attempt WHERE attempt_key = ?').get('admin|ip:attacker').failures, 1);
+  assert.equal(auth.loginAuth(right(), 'ip:attacker').user.username, 'admin');
+
+  // Over HTTP the lock answers 429.
+  db.exec('DELETE FROM auth_attempt');
+  const post = (body) => request('/api/auth/login', { method: 'POST', body }, false);
+  for (let attempt = 0; attempt < 5; attempt += 1) assert.equal((await post(wrong)).status, 401);
+  assert.equal((await post(right())).status, 429);
+  db.exec('DELETE FROM auth_attempt');
+});
+
+test('security log records logins and locks, never secrets, and stays out of reach of device certificates', async () => {
+  const secret = db.prepare('SELECT totp_secret FROM auth_user WHERE username = ?').get('admin').totp_secret;
+  db.exec('DELETE FROM auth_attempt; DELETE FROM security_log;');
+  const events = (category) => securityLog.listSecurityEvents({ category }).rows;
+
+  auth.loginAuth({ username: 'admin', password: 'password1', code: totp(secret) }, 'ip:10.0.0.1');
+  assert.throws(() => auth.loginAuth({ username: 'admin', password: 'typed-secret', code: '000000' }, 'ip:10.0.0.2'));
+  assert.throws(() => auth.loginAuth({ username: 'my-password-in-the-wrong-box', password: 'x', code: '1' }, 'ip:10.0.0.3'));
+
+  const [unknown, failed, success] = events('login');
+  assert.deepEqual([success.event, success.username, success.source], ['login_success', 'admin', 'ip:10.0.0.1']);
+  assert.deepEqual([failed.event, failed.username, failed.source], ['login_failed', 'admin', 'ip:10.0.0.2']);
+  assert.deepEqual([unknown.username, unknown.detail], ['', '账号不存在'], 'an unknown name is not written down');
+  const stored = JSON.stringify(db.prepare('SELECT * FROM security_log').all());
+  assert.ok(!stored.includes('typed-secret') && !stored.includes('my-password-in-the-wrong-box') && !stored.includes('password1'));
+
+  // A lock is recorded once, and attempts while locked add nothing.
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    assert.throws(() => auth.loginAuth({ username: 'admin', password: 'wrong', code: '0' }, 'ip:10.0.0.9'));
+  }
+  const before = events('login').length;
+  assert.throws(() => auth.loginAuth({ username: 'admin', password: 'wrong', code: '0' }, 'ip:10.0.0.9'), { status: 429 });
+  assert.equal(events('login').length, before);
+  assert.equal(events('login').filter((row) => row.event === 'login_locked').length, 1);
+
+  for (let attempt = 0; attempt < 5; attempt += 1) auth.verifyUserCode('admin', '000000', 'cert:AB');
+  assert.equal(events('code').filter((row) => row.event === 'code_failed').length, 5);
+  assert.equal(events('code').filter((row) => row.event === 'code_locked').length, 1);
+  assert.equal(events('cert').length, 0);
+
+  // Paging goes newest first without gaps.
+  const all = securityLog.listSecurityEvents({ limit: 500 }).rows;
+  const first = securityLog.listSecurityEvents({ limit: 3 });
+  assert.equal(first.hasMore, true);
+  const next = securityLog.listSecurityEvents({ limit: 3, before: first.rows[2].id });
+  assert.deepEqual([...first.rows, ...next.rows].map((row) => row.id), all.slice(0, 6).map((row) => row.id));
+
+  const response = await request('/api/settings/security-log?category=login&limit=2');
+  assert.equal(response.status, 200);
+  const page = await response.json();
+  assert.equal(page.rows.length, 2);
+  assert.equal(page.retentionDays, 180);
+  assert.equal((await request('/api/settings/security-log', {}, false)).status, 401);
+
+  let status = 0;
+  securityLog.securityLogHandler(
+    { query: {}, socket: { getPeerCertificate: () => ({ serialNumber: 'AB' }) } },
+    { status(code) { status = code; return this; }, json() {} }
+  );
+  assert.equal(status, 403, 'a phone on the certificate port cannot read the log');
+
+  // Old entries are removed.
+  db.prepare('UPDATE security_log SET at = ? WHERE id = ?').run(new Date(Date.now() - 181 * 86400000).toISOString(), all[0].id);
+  securityLog.pruneSecurityLog();
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM security_log WHERE id = ?').get(all[0].id).count, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM security_log').get().count, all.length - 1);
+  db.exec('DELETE FROM auth_attempt');
 });
 
 test('Excel import inserts and updates rows while preserving blank package fee', () => {
@@ -381,12 +487,76 @@ test('KPI achievement counts this year net, matches groups and keeps forecasts',
   assert.equal(next.forecast.added, 4);
   assert.equal(next.forecasts.find((row) => row.id === knownRow.id).landed, true);
 
+  // Progress: partial landing lowers what still counts, and each update keeps its server time.
+  const progressUrl = `/api/kpi/forecasts/${freshRow.id}/progress`;
+  const update = (body) => request(progressUrl, { method: 'POST', body });
+  assert.equal((await update({ note: '   ' })).status, 400);
+  assert.equal((await update({ note: 'x'.repeat(501) })).status, 400);
+  assert.equal((await update({ note: '超出', landed_count: 5 })).status, 400);
+  assert.equal((await update({ note: '负数', landed_count: -1 })).status, 400);
+  assert.equal((await update({ note: '小数', landed_count: 1.5 })).status, 400);
+  assert.equal((await request('/api/kpi/forecasts/999999/progress', { method: 'POST', body: { note: 'x' } })).status, 404);
+  assert.equal((await request('/api/kpi/forecasts/999999/progress')).status, 404);
+
+  const beforeUpdate = Date.now();
+  const noted = await update({ note: '已签合同，等施工', created_at: '2000-01-01T00:00:00Z' });
+  assert.equal(noted.status, 201);
+  const notedRow = await noted.json();
+  assert.equal(notedRow.landed_count, 0, 'leaving the count out keeps it as it was');
+  assert.equal(notedRow.latest_note, '已签合同，等施工');
+  const stamped = new Date(notedRow.latest_at).getTime();
+  assert.ok(stamped >= beforeUpdate - 1000 && stamped <= Date.now() + 1000, 'the time is the server clock, not the request');
+
+  assert.equal((await update({ note: '开通 3 条', landed_count: 3 })).status, 201);
+  next = await (await request('/api/kpi?kpiMode=1')).json();
+  const partial = next.forecasts.find((row) => row.id === freshRow.id);
+  assert.deepEqual([partial.line_count, partial.landed_count, partial.remaining, partial.landed], [4, 3, 1, false]);
+  assert.equal(partial.latest_note, '开通 3 条');
+  assert.equal(next.forecast.added, 1, 'only the part not yet landed still counts');
+  assert.deepEqual(next.forecast.byMonth[12], { added: 1, cancelled: 1 });
+  assert.equal(next.forecast.expectedNet, next.actual.net + 1 - 1);
+
+  const history = await (await request(progressUrl)).json();
+  assert.deepEqual(history.entries.map((entry) => entry.note), ['开通 3 条', '已签合同，等施工']);
+  assert.deepEqual(history.entries.map((entry) => entry.landed_count), [3, 0]);
+  assert.equal(history.entries[0].created_by, 'admin');
+
+  assert.equal((await request(`/api/kpi/forecasts/${freshRow.id}`, { method: 'PATCH', body: { line_count: 2 } })).status, 400, 'fewer lines than have landed');
+
+  // The one-click buttons act on the whole forecast and leave a trace.
+  assert.equal((await (await request(`/api/kpi/forecasts/${freshRow.id}`, { method: 'PATCH', body: { landed: true } })).json()).remaining, 0);
+  assert.equal((await (await request(progressUrl)).json()).entries[0].note, '标记为全部落地');
+  const restored = await (await request(`/api/kpi/forecasts/${freshRow.id}`, { method: 'PATCH', body: { landed: false } })).json();
+  assert.deepEqual([restored.landed_count, restored.remaining], [0, 4]);
+  assert.equal(restored.latest_note, '恢复为预计');
+
   assert.equal((await request(`/api/kpi/forecasts/${freshRow.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM kpi_forecast_progress WHERE forecast_id = ?').get(freshRow.id).count, 0, 'its history goes with it');
+  assert.equal((await request(`/api/kpi/forecasts/${freshRow.id}`, { method: 'DELETE' })).status, 404);
   assert.equal((await request(`/api/kpi/forecasts/${freshRow.id}`, { method: 'DELETE' })).status, 404);
   next = await (await request('/api/kpi?kpiMode=1')).json();
   assert.equal(next.forecast.added, 0);
   assert.equal(next.forecast.cancelled, 1);
   assert.equal(next.forecasts.length, 2);
+});
+
+test('existing forecasts marked as landed count as fully landed after the upgrade', () => {
+  const old = new DatabaseSync(':memory:');
+  old.exec(`CREATE TABLE kpi_forecast (id INTEGER PRIMARY KEY AUTOINCREMENT, year INTEGER NOT NULL, month INTEGER NOT NULL,
+    group_code TEXT NOT NULL, group_name TEXT NOT NULL, manager_name TEXT NOT NULL, product_type TEXT NOT NULL,
+    line_count INTEGER NOT NULL CHECK(line_count > 0), landed INTEGER NOT NULL DEFAULT 0, created_by TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'added');
+    INSERT INTO kpi_forecast (year, month, group_code, group_name, manager_name, product_type, line_count, landed, created_at, updated_at) VALUES
+      (2026, 11, 'A', 'n', 'm', 'SPN专线', 3, 1, 'x', 'x'),
+      (2026, 12, 'B', 'n', 'm', 'SPN专线', 2, 0, 'x', 'x');`);
+  const deps = { db: old, leasedLineSource: () => 'x', currentUser: () => null, currentPeriod: () => ({}), addedStatuses: [], cancelledStatuses: [], productTypes: [] };
+  createKpiRouter(deps);
+  createKpiRouter(deps); // A second start changes nothing.
+  assert.deepEqual(old.prepare('SELECT group_code, line_count, landed_count FROM kpi_forecast ORDER BY id').all().map((row) => ({ ...row })), [
+    { group_code: 'A', line_count: 3, landed_count: 3 },
+    { group_code: 'B', line_count: 2, landed_count: 0 }
+  ]);
+  old.close();
 });
 
 test('warning day boundaries, KPI scope, authentication and persistent marks', async () => {

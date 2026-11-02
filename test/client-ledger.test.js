@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ApiError, requestJson } from '../client/src/api.js';
-import { kpiManagerRows } from '../client/src/kpiRows.js';
+import { forecastState, kpiManagerRows } from '../client/src/kpiRows.js';
+import { describeSource, isAlertEvent } from '../client/src/securityLog.js';
 import { advancedFilterKeys, defaultManagers, defaultVisibleColumns, emptyFilters, tableColumns } from '../client/src/ledger/config.js';
 import {
   moveColumn,
@@ -19,7 +20,7 @@ import {
   ledgerPeriodExportQuery,
   ledgerListQuery
 } from '../client/src/ledger/query.js';
-import { beijingDate, beijingMonth, displayMoney, displayValue, inputValue } from '../client/src/utils.js';
+import { beijingDate, beijingMonth, beijingTime, displayMoney, displayValue, inputValue } from '../client/src/utils.js';
 
 const sort = { key: 'group_code', direction: 'asc' };
 
@@ -47,10 +48,10 @@ test('ledger list and export queries carry the same filters, sort and KPI scope;
 test('KPI manager rows keep all 18 managers with zeros and skip landed forecasts', () => {
   const managers = [{ manager_name: '张凯', added: 5, cancelled: 1 }, { manager_name: 'Other', added: 2, cancelled: 0 }];
   const forecasts = [
-    { manager_name: '张凯', kind: 'added', line_count: 3, landed: false },
-    { manager_name: '张凯', kind: 'cancelled', line_count: 2, landed: false },
-    { manager_name: '张凯', kind: 'added', line_count: 9, landed: true },
-    { manager_name: 'Newcomer', kind: 'added', line_count: 1, landed: false }
+    { manager_name: '张凯', kind: 'added', remaining: 3 },
+    { manager_name: '张凯', kind: 'cancelled', remaining: 2 },
+    { manager_name: '张凯', kind: 'added', remaining: 0 },
+    { manager_name: 'Newcomer', kind: 'added', remaining: 1 }
   ];
   const defaults = kpiManagerRows(managers, forecasts, 'defaults');
   assert.equal(defaults.length, defaultManagers.length);
@@ -63,6 +64,27 @@ test('KPI manager rows keep all 18 managers with zeros and skip landed forecasts
   const all = kpiManagerRows(managers, forecasts, 'all');
   assert.deepEqual(all.map((row) => row.manager_name), ['张凯', 'Other', 'Newcomer']);
   assert.equal(all[2].expectedNet, 1);
+});
+
+test('a forecast state follows how much of it has landed', () => {
+  assert.equal(forecastState({ kind: 'added', landed_count: 0, remaining: 5 }), '预计');
+  assert.equal(forecastState({ kind: 'added', landed_count: 2, remaining: 3 }), '部分落地');
+  assert.equal(forecastState({ kind: 'added', landed_count: 5, remaining: 0 }), '已落地');
+  assert.equal(forecastState({ kind: 'cancelled', landed_count: 1, remaining: 1 }), '部分销户');
+  assert.equal(forecastState({ kind: 'cancelled', landed_count: 2, remaining: 0 }), '已销户');
+});
+
+test('security log sources read as devices or addresses, times in Beijing time', () => {
+  const certificates = [{ serial: '75AB4489', name: '张凯手机' }];
+  assert.equal(describeSource('cert:75AB4489', certificates), '设备 张凯手机');
+  assert.equal(describeSource('cert:FFEEDDCCBBAA', certificates), '设备证书 FFEEDDCC');
+  assert.equal(describeSource('ip:::ffff:203.0.113.5'), '203.0.113.5');
+  assert.equal(describeSource('ip:203.0.113.5'), '203.0.113.5');
+  assert.equal(describeSource(''), '—');
+  assert.equal(beijingTime('2026-11-02T16:30:05.000Z'), '2026-11-03 00:30:05');
+  assert.equal(beijingTime(null), '—');
+  assert.equal(isAlertEvent('login_failed'), true);
+  assert.equal(isAlertEvent('login_success'), false);
 });
 
 test('year and quarter export queries carry only the period and the KPI scope', () => {

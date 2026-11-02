@@ -52,6 +52,22 @@ export function beijingMonth(date = new Date()) {
   return beijingDate(date).slice(0, 7);
 }
 
+// A stored timestamp as date and time in Beijing time; missing or invalid reads as a dash.
+export function beijingTime(value) {
+  if (!value) return emptyMark;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return emptyMark;
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  }).format(date);
+}
+
 export function filtersToSearchParams(filters, extra = {}) {
   const params = new URLSearchParams(extra);
   Object.entries(filters).forEach(([key, value]) => {

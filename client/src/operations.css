@@ -75,6 +75,28 @@
 .kpi-table tbody tr { cursor: default; }
 .kpi-table tfoot td { position: sticky; bottom: 0; background: var(--surface); border-top: 1px solid var(--line); border-bottom: 0; font-weight: 600; }
 .kpi-landed td { color: var(--muted); }
+.kpi-table tbody tr.kpi-forecast-row { cursor: pointer; }
+.kpi-table tbody tr.kpi-forecast-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.kpi-latest-note { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.kpi-progress-dialog { width: min(560px, 100%); }
+.kpi-progress-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+.kpi-progress-head h3 { margin: 0; font-size: 17px; overflow-wrap: anywhere; }
+.kpi-progress-close { flex: none; width: 32px; height: 32px; padding: 0; }
+.kpi-progress-body { padding: 16px 20px 20px; overflow: auto; }
+.kpi-progress-body h4 { margin: 20px 0 8px; font-size: 14px; }
+.kpi-progress-facts { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: 13px; }
+.kpi-progress-facts dt { color: var(--muted); }
+.kpi-progress-facts dd { margin: 0; overflow-wrap: anywhere; }
+.kpi-progress-form { display: grid; gap: 12px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--rule); }
+.kpi-progress-form label { display: grid; gap: 6px; margin: 0; font-size: 13px; font-weight: 500; }
+.kpi-progress-form input, .kpi-progress-form textarea { width: 100%; min-width: 0; }
+.kpi-progress-submit { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.kpi-progress-list { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.kpi-progress-list li { padding-bottom: 12px; border-bottom: 1px solid var(--rule); }
+.kpi-progress-list li:last-child { padding-bottom: 0; border-bottom: 0; }
+.kpi-progress-list p { margin: 0; }
+.kpi-progress-meta { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.kpi-progress-note { margin-top: 4px !important; font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .kpi-progress { display: flex; height: 8px; margin-top: 18px; overflow: hidden; border-radius: 999px; background: var(--rule); }
 .kpi-progress-actual { background: var(--accent); }
 .kpi-progress-forecast { background: rgba(0, 113, 227, .35); }

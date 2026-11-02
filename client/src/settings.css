@@ -1,0 +1,229 @@
+.settings-section {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+  gap: 32px;
+  padding: 24px 0;
+  border-top: 1px solid var(--line);
+}
+
+.settings-label h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.settings-label p,
+.settings-label ol {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.settings-label ol {
+  padding-left: 18px;
+}
+
+.settings-panel {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.settings-panel > .table-scroll {
+  margin: -16px;
+  border-radius: var(--radius-sm);
+}
+
+.settings-panel .subtle {
+  margin: 12px 0 0;
+}
+
+.settings-panel code,
+.settings-issued code {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-family: var(--mono);
+}
+
+.settings-facts,
+.settings-issued {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.settings-facts dt,
+.settings-issued dt {
+  color: var(--muted);
+}
+
+.settings-facts dd,
+.settings-issued dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-status {
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+
+.settings-toggle {
+  width: fit-content;
+}
+
+.settings-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.settings-fields:first-child {
+  margin-top: 0;
+}
+
+.settings-fields label,
+.settings-dialog label {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.settings-fields input,
+.settings-dialog input {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+}
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.settings-actions .subtle {
+  margin: 0;
+}
+
+.settings-table {
+  min-width: 620px;
+}
+
+.settings-table tbody tr {
+  cursor: default;
+}
+
+.settings-table tbody tr:hover {
+  background: transparent;
+}
+
+.settings-inactive td:first-child {
+  color: var(--muted);
+}
+
+.settings-log-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+}
+
+.settings-log-head .subtle,
+.settings-first {
+  margin: 0;
+}
+
+.settings-panel .settings-first {
+  margin-top: 0;
+}
+
+.settings-panel .inline-error {
+  margin-bottom: 12px;
+}
+
+.settings-log-scroll {
+  max-height: 480px;
+  border-top: 1px solid var(--rule);
+}
+
+.settings-row-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.settings-row-actions button {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.settings-danger {
+  border-color: rgba(217, 45, 32, .45);
+  color: var(--red);
+}
+
+.settings-dialog {
+  display: block;
+  width: min(480px, 100%);
+  padding: 22px;
+  overflow: auto;
+}
+
+.settings-dialog h3 {
+  margin: 0;
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+
+.settings-dialog > p {
+  margin: 8px 0 16px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.settings-dialog > p strong {
+  color: var(--ink);
+}
+
+.settings-dialog .inline-error {
+  margin-top: 12px;
+}
+
+.settings-issued-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+@media (max-width: 900px) {
+  .settings-section {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .settings-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-dialog {
+    padding: 16px;
+  }
+}
