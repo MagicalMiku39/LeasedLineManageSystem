@@ -1,9 +1,10 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { gunzipSync } from 'node:zlib';
 import { DatabaseSync } from 'node:sqlite';
 import { createKpiRouter } from '../server/lib/kpi.js';
 import XLSX from '../server/lib/xlsx.js';
@@ -737,6 +738,286 @@ test('new lines are offered to the forecast they may answer, and nothing counts 
   assert.equal((await request(`/api/kpi/forecasts/${first}`, { method: 'DELETE' })).status, 200);
   assert.equal(db.prepare('SELECT COUNT(*) AS c FROM kpi_forecast_match WHERE forecast_id = ?').get(first).c, 0);
   for (const id of [second, cancelling]) await request(`/api/kpi/forecasts/${id}`, { method: 'DELETE' });
+});
+
+test('backups are readable copies, kept by kind, and weekly ones fall due after seven days', async () => {
+  const { createBackupService } = await import('../server/lib/backup.js');
+  const { dbPath } = await import('../server/lib/db.js');
+  const dir = join(tempDir, 'backup-unit');
+  let clock = new Date('2026-11-01T00:00:00Z');
+  const backups = createBackupService({ db, dbPath, dir, now: () => clock });
+
+  assert.equal(backups.weeklyDue(), true, 'no weekly backup yet');
+  const weekly = await backups.create('weekly', { detail: '测试' });
+  assert.equal(backups.weeklyDue(), false);
+  clock = new Date('2026-11-07T23:59:59Z');
+  assert.equal(backups.weeklyDue(), false);
+  clock = new Date('2026-11-08T00:00:00Z');
+  assert.equal(backups.weeklyDue(), true);
+
+  // The file unpacks into a database with the same data.
+  const lines = db.prepare('SELECT COUNT(*) AS c FROM leased_line').get().c;
+  const copyPath = join(tempDir, 'backup-copy.db');
+  writeFileSync(copyPath, gunzipSync(readFileSync(join(dir, weekly.name))));
+  const copy = new DatabaseSync(copyPath, { readOnly: true });
+  assert.equal(copy.prepare('SELECT COUNT(*) AS c FROM leased_line').get().c, lines);
+  copy.close();
+  assert.equal(weekly.counts.leasedLines, lines);
+  assert.ok(weekly.size > 0 && weekly.databaseSize > 0);
+
+  // Each kind keeps its own newest few; the oldest manual one goes, the weekly one stays.
+  const manual = [];
+  for (let index = 0; index < 11; index += 1) {
+    clock = new Date(clock.getTime() + 1000);
+    manual.push(await backups.create('manual'));
+  }
+  const kept = backups.list();
+  assert.equal(kept.filter((item) => item.reason === 'manual').length, 10);
+  assert.ok(!kept.some((item) => item.name === manual[0].name));
+  assert.ok(kept.some((item) => item.name === weekly.name));
+  assert.equal(readdirSync(dir).filter((name) => name.endsWith('.db.gz')).length, 11);
+  assert.equal(readdirSync(dir).filter((name) => name.startsWith('.')).length, 0, 'no temporary files left');
+  assert.equal(backups.file('../ledger.db'), null);
+  assert.equal(backups.file(manual[0].name), null);
+  assert.ok(backups.file(weekly.name));
+  await assert.rejects(backups.create('nope'), /未知的备份原因/);
+});
+
+test('a rollback puts one kind of data back, backs up first, and can itself be undone', async () => {
+  const { createBackupService } = await import('../server/lib/backup.js');
+  const { dbPath } = await import('../server/lib/db.js');
+  const backups = createBackupService({ db, dbPath, dir: join(tempDir, 'backup-restore') });
+  const at = nowIso();
+  const lineId = Number(db.prepare("INSERT INTO leased_line (group_code, group_product_code, product_name, product_status_name, updated_at) VALUES ('RSG', 'RS1', '互联网专线', '正常在用', ?)").run(at).lastInsertRowid);
+  db.prepare("INSERT INTO line_warning_mark (line_id, mark, updated_at) VALUES (?, 'remind', ?)").run(lineId, at);
+  db.prepare("INSERT INTO strategic_customer (group_code, group_name, manager_name) VALUES ('RSG1', '战客一', '冯琼')").run();
+  const users = db.prepare('SELECT COUNT(*) AS c FROM auth_user').get().c;
+  const backup = await backups.create('manual');
+
+  // After the backup: a wrong import changes a line and adds one, a manual edit, a forecast, a new strategic group.
+  db.prepare("UPDATE leased_line SET product_status_name = '正式销户', updated_at = ? WHERE id = ?").run(`${at}x`, lineId);
+  db.prepare("INSERT INTO leased_line (group_code, group_product_code, product_name, product_status_name) VALUES ('RSG', 'RS2', '互联网专线', '正常在用')").run();
+  db.prepare("INSERT INTO import_batch (id, file_name, status, imported_at) VALUES ('RS-BATCH', '导错的清单.xlsx', 'finished', ?)").run(at);
+  db.prepare("INSERT INTO change_log (leased_line_id, field_name, old_value, new_value, changed_by) VALUES (?, 'remark', '', '手工', 'admin')").run(lineId);
+  db.prepare("INSERT INTO kpi_forecast (year, month, group_code, group_name, manager_name, product_type, line_count, created_at, updated_at, kind) VALUES (2026, 12, 'RSG', '集团', '冯琼', '互联网专线', 1, ?, ?, 'added')").run(at, at);
+  db.prepare("INSERT INTO strategic_customer (group_code, group_name, manager_name) VALUES ('RSG2', '战客二', '冯琼')").run();
+
+  const preview = await backups.preview(backup.name, 'ledger');
+  assert.deepEqual(preview.imports.map((item) => item.fileName), ['导错的清单.xlsx']);
+  assert.deepEqual([preview.linesAdded, preview.linesChanged, preview.linesRemoved, preview.manualEdits, preview.forecastsChanged], [1, 1, 0, 1, 1]);
+  const lineRow = preview.tables.find((row) => row.table === 'leased_line');
+  assert.equal(lineRow.current, lineRow.backup + 1);
+  await assert.rejects(backups.preview(backup.name, 'everything'), /台账类数据还是战客清单/);
+  await assert.rejects(backups.restore('ledger-20260101T000000Z-manual-000000.db.gz', 'ledger'), /找不到/);
+
+  const status = (code) => db.prepare('SELECT product_status_name AS s FROM leased_line WHERE group_product_code = ?').get(code)?.s ?? null;
+  const result = await backups.restore(backup.name, 'ledger');
+  assert.equal(result.before.reason, 'before-restore');
+  assert.deepEqual([status('RS1'), status('RS2')], ['正常在用', null]);
+  assert.equal(db.prepare('SELECT mark FROM line_warning_mark WHERE line_id = ?').get(lineId).mark, 'remind', 'marks come back with their line');
+  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM import_batch WHERE id = 'RS-BATCH'").get().c, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM kpi_forecast WHERE group_code = 'RSG'").get().c, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM strategic_customer WHERE group_code = 'RSG2'").get().c, 1, 'the strategic list is not part of 台账类数据');
+  assert.equal(db.prepare('SELECT COUNT(*) AS c FROM auth_user').get().c, users);
+
+  // Rolling back to the "before" backup undoes the rollback.
+  await backups.restore(result.before.name, 'ledger');
+  assert.deepEqual([status('RS1'), status('RS2')], ['正式销户', '正常在用']);
+  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM kpi_forecast WHERE group_code = 'RSG'").get().c, 1);
+
+  await backups.restore(backup.name, 'strategic');
+  assert.deepEqual(db.prepare("SELECT group_code FROM strategic_customer WHERE group_code LIKE 'RSG%' ORDER BY 1").all().map((row) => row.group_code), ['RSG1']);
+  assert.equal(status('RS2'), '正常在用', 'the ledger is not part of 战客清单');
+  assert.equal(backups.list().filter((item) => item.reason === 'before-restore').length, 3);
+
+  await backups.restore(backup.name, 'ledger');
+  db.prepare('DELETE FROM leased_line WHERE id = ?').run(lineId);
+  db.exec("DELETE FROM strategic_customer WHERE group_code LIKE 'RSG%'");
+  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM leased_line WHERE group_product_code LIKE 'RS%'").get().c, 0);
+});
+
+test('imports back up first, and a backup downloads only with the authenticator code', async () => {
+  const listed = async () => (await (await request('/api/settings/backups')).json()).backups;
+  const before = await listed();
+
+  // A file that fails to import still gets its backup first.
+  const uploads = join(process.cwd(), 'uploads');
+  const existing = new Set(readdirSync(uploads));
+  const form = new FormData();
+  form.append('file', new Blob(['not a workbook']), 'broken.xlsx');
+  const failed = await request('/api/import', { method: 'POST', body: form });
+  for (const name of readdirSync(uploads)) if (!existing.has(name)) rmSync(join(uploads, name), { force: true });
+  assert.equal(failed.status, 400);
+  let after = await listed();
+  assert.equal(after.length, before.length + 1);
+  assert.deepEqual([after[0].reason, after[0].detail], ['ledger-import', 'broken.xlsx']);
+
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([['集团编码', '集团名称', '客户经理'], ['BK001', '备份测试', '冯琼']]), 'S');
+  const strategicForm = new FormData();
+  strategicForm.append('file', new Blob([XLSX.write(book, { type: 'buffer', bookType: 'xlsx' })]), 'zk.xlsx');
+  const { token } = await (await request('/api/strategic/preview', { method: 'POST', body: strategicForm })).json();
+  const committed = await (await request('/api/strategic/commit', { method: 'POST', body: { token } })).json();
+  assert.ok(committed.backup);
+  assert.equal(committed.backupError, '');
+  after = await listed();
+  assert.equal(after[0].reason, 'strategic-import');
+  assert.equal(after[0].counts.strategicCustomers, 0, 'taken before the list was replaced');
+  db.exec('DELETE FROM strategic_customer; DELETE FROM strategic_import');
+
+  const manual = await request('/api/settings/backups', { method: 'POST' });
+  assert.equal(manual.status, 201);
+  const { name } = await manual.json();
+
+  const secret = db.prepare('SELECT totp_secret FROM auth_user WHERE username = ?').get('admin').totp_secret;
+  assert.equal((await request(`/api/settings/backups/${name}/download`, { method: 'POST', body: { code: '000000' } })).status, 403);
+  assert.equal((await request('/api/settings/backups/..%2Fledger.db/download', { method: 'POST', body: { code: totp(secret) } })).status, 404);
+  const download = await request(`/api/settings/backups/${name}/download`, { method: 'POST', body: { code: totp(secret) } });
+  assert.equal(download.status, 200);
+  assert.match(download.headers.get('content-disposition'), new RegExp(name.replaceAll('.', '\\.')));
+  assert.ok(gunzipSync(Buffer.from(await download.arrayBuffer())).subarray(0, 15).toString() === 'SQLite format 3');
+  // Rolling back over HTTP needs the code too, and is logged.
+  const scopeOnly = await request(`/api/settings/backups/${name}/restore-preview`, { method: 'POST', body: { scope: 'strategic' } });
+  assert.equal(scopeOnly.status, 200);
+  assert.equal((await scopeOnly.json()).tables.length, 2);
+  assert.equal((await request(`/api/settings/backups/${name}/restore`, { method: 'POST', body: { scope: 'strategic', code: '000000' } })).status, 403);
+  assert.equal((await request(`/api/settings/backups/${name}/restore`, { method: 'POST', body: { scope: 'all', code: totp(secret) } })).status, 400);
+  const rolledBack = await request(`/api/settings/backups/${name}/restore`, { method: 'POST', body: { scope: 'strategic', code: totp(secret) } });
+  assert.equal(rolledBack.status, 200);
+  const restoredResult = await rolledBack.json();
+  assert.equal(restoredResult.before.reason, 'before-restore');
+
+  const events = db.prepare("SELECT event, detail FROM security_log WHERE event LIKE 'backup_%' ORDER BY id").all();
+  assert.deepEqual(events.map((row) => row.event), ['backup_created', 'backup_downloaded', 'backup_restored']);
+  assert.deepEqual(events.slice(0, 2).map((row) => row.detail), [name, name]);
+  assert.match(events[2].detail, new RegExp(`战客清单回退到 ${name.replaceAll('.', '\\.')}.*${restoredResult.before.name.replaceAll('.', '\\.')}`));
+  assert.equal((await request('/api/settings/backups', {}, false)).status, 401);
+  db.exec("DELETE FROM auth_attempt; DELETE FROM security_log WHERE event LIKE 'code_%' OR event LIKE 'backup_%'");
+});
+
+test('status changes are sorted into 转正常, 转复机, 转销户, 转停机 and the rest', async () => {
+  const { statusChangeType, diffLine } = await import('../server/lib/ledger-changes.js');
+  const cases = [
+    ['临时生成资料', '正常在用', 'normalized'],
+    ['停机', '正常在用', 'resumed'],
+    ['停机执行中', '正常在用', 'resumed'],
+    ['正常在用', '销户(订单处理中)', 'cancelled'],
+    ['停机执行中', '正式销户', 'cancelled'],
+    ['停机', '欠费销户', 'cancelled'],
+    ['销户(订单处理中)', '正式销户', 'status'],
+    ['临时生成资料', '正式销户', 'status'],
+    ['正常在用', '停机执行中', 'stopped'],
+    ['停机执行中', '停机', 'stopped'],
+    ['正常在用', '回退（注销）', 'status'],
+    ['', '正常在用', 'status']
+  ];
+  for (const [from, to, expected] of cases) assert.equal(statusChangeType(from, to), expected, `${from || '空'} → ${to}`);
+  const [change] = diffLine({ product_status_name: '停机' }, { product_status_name: '正常在用', status_time: '2026-11-01' });
+  assert.deepEqual([change.type, change.oldValue, change.newValue], ['resumed', '停机', '正常在用']);
+});
+
+test('strategic customer list sorts groups into penetrated, lost and untouched', async () => {
+  const insert = db.prepare(`INSERT INTO leased_line
+    (group_code, group_name, group_product_code, product_name, product_status_name, ledger_status, manager_name, start_time, status_time, package_fee, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const line = (group, code, product, status, start = '2025-03-01', statusTime = null, fee = 100) =>
+    insert.run(group, `台账${group}`, code, product, status, status, '张凯', start, statusTime, fee, nowIso());
+  line('ZK001', 'ZKL1', '互联网专线', '正常在用');
+  line('ZK001', 'ZKL2', '传输专线', '正式销户', '2024-01-01', '2026-02-01');
+  line('ZK002', 'ZKL3', '互联网专线', '欠费销户', '2024-01-01', '2026-05-06');
+  line('ZK003', 'ZKL4', '互联网专线', '回退（注销）');
+  line('00ZK5', 'ZKL5', '其他产品', '停机');
+
+  // A title row above the header, rows with missing fields, a duplicate, and a code with leading zeros.
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([
+    ['2026年战客名单'],
+    ['序号', '集团编码', '集团名称', '客户经理'],
+    [1, 'ZK001', '战客一', '冯琼'],
+    [2, 'ZK002', '战客二', '王倩'],
+    [3, 'ZK003', '战客三', '冯琼'],
+    [4, 'ZK004', '战客四', '王倩'],
+    [5, '00ZK5', '战客五', '冯琼'],
+    [6, '', '没有编码', '冯琼'],
+    [7, 'ZK006', '', ''],
+    [8, 'ZK001', '重复', '王倩']
+  ]), '名单');
+  const preview = async (bytes, name = 'zk.xlsx') => {
+    const form = new FormData();
+    form.append('file', new Blob([bytes]), name);
+    return request('/api/strategic/preview', { method: 'POST', body: form });
+  };
+  const bytes = XLSX.write(book, { type: 'buffer', bookType: 'xlsx' });
+
+  assert.equal((await request('/api/strategic?kpiMode=1')).status, 200);
+  assert.equal((await request('/api/strategic?kpiMode=1', {}, false)).status, 401);
+
+  const noCodeBook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(noCodeBook, XLSX.utils.aoa_to_sheet([['名称'], ['某集团']]), 'S');
+  const refused = await preview(XLSX.write(noCodeBook, { type: 'buffer', bookType: 'xlsx' }));
+  assert.equal(refused.status, 400);
+  assert.match((await refused.json()).error, /集团编码/);
+  const twoColumnBook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(twoColumnBook, XLSX.utils.aoa_to_sheet([['集团编码', '集团名称'], ['ZK001', '战客一']]), 'S');
+  const twoColumns = await preview(XLSX.write(twoColumnBook, { type: 'buffer', bookType: 'xlsx' }));
+  assert.equal(twoColumns.status, 400);
+  assert.match((await twoColumns.json()).error, /缺少“客户经理”列/);
+
+  // The template has the three required columns, 集团编码 formatted as text, and no sample groups.
+  const template = await request('/api/strategic/template');
+  assert.equal(template.status, 200);
+  assert.match(template.headers.get('content-disposition'), /strategic-customer-template\.xlsx/);
+  const templateBook = XLSX.read(Buffer.from(await template.arrayBuffer()), { type: 'buffer', cellNF: true, sheetStubs: true });
+  assert.deepEqual(templateBook.SheetNames, ['战客清单', '填写说明']);
+  assert.deepEqual(XLSX.utils.sheet_to_json(templateBook.Sheets['战客清单'], { header: 1 })[0], ['集团编码', '集团名称', '客户经理']);
+  assert.equal(templateBook.Sheets['战客清单'].A2.z, '@');
+  assert.equal((await (await preview(Buffer.from(await (await request('/api/strategic/template')).arrayBuffer()))).json()).error, '清单里没有战客集团');
+
+  const previewResponse = await preview(bytes);
+  assert.equal(previewResponse.status, 200);
+  const shown = await previewResponse.json();
+  assert.deepEqual([shown.rowCount, shown.incomplete, shown.duplicates, shown.inLedger, shown.replacing], [5, 2, 1, 4, false]);
+  assert.deepEqual(shown.incompleteRows, [{ row: 8, missing: ['集团编码'] }, { row: 9, missing: ['集团名称', '客户经理'] }]);
+  assert.equal(shown.columns.manager_name, '客户经理');
+  assert.equal((await (await request('/api/strategic?kpiMode=1')).json()).groups.length, 0, 'a preview changes nothing');
+
+  assert.equal((await request('/api/strategic/commit', { method: 'POST', body: { token: 'nope' } })).status, 409);
+  const committed = await request('/api/strategic/commit', { method: 'POST', body: { token: shown.token } });
+  assert.equal(committed.status, 200);
+  assert.equal((await request('/api/strategic/commit', { method: 'POST', body: { token: shown.token } })).status, 409, 'a preview is used once');
+
+  const byCode = (data) => Object.fromEntries(data.groups.map((row) => [row.groupCode, row]));
+  let data = await (await request('/api/strategic?kpiMode=1')).json();
+  let groups = byCode(data);
+  assert.deepEqual(Object.fromEntries(Object.entries(groups).map(([code, row]) => [code, row.status])), {
+    ZK001: 'penetrated', ZK002: 'lost', ZK003: 'untouched', ZK004: 'untouched', '00ZK5': 'untouched'
+  });
+  assert.deepEqual([groups.ZK001.activeLines, groups.ZK001.cancelledLines, groups.ZK001.activeMonthlyFee], [1, 1, 100]);
+  assert.equal(groups.ZK001.managerName, '冯琼', 'the manager comes from the list, not the ledger');
+  assert.equal(groups.ZK002.managerName, '王倩');
+  assert.equal(groups.ZK002.lastCancelledAt, '2026-05-06');
+  assert.deepEqual([data.summary.total, data.summary.penetrated, data.summary.lost, data.summary.untouched], [5, 1, 1, 3]);
+  assert.equal(data.summary.penetrationRate, 0.2);
+  assert.equal(data.list.row_count, 5);
+
+  // Outside the KPI products the stopped line counts, and leading zeros still match.
+  data = await (await request('/api/strategic?kpiMode=0')).json();
+  assert.equal(byCode(data)['00ZK5'].status, 'penetrated');
+
+  const detail = await (await request('/api/strategic/groups/ZK001?kpiMode=1')).json();
+  assert.equal(detail.group.status, 'penetrated');
+  assert.deepEqual(detail.lines.map((row) => [row.group_product_code, row.kind]), [['ZKL1', 'active'], ['ZKL2', 'cancelled']]);
+  assert.equal((await request('/api/strategic/groups/NOTLISTED')).status, 404);
+
+  // A new list replaces the old one as a whole.
+  const smaller = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(smaller, XLSX.utils.aoa_to_sheet([['集团编码', '集团名称', '客户经理'], ['ZK002', '战客二', '王倩'], ['ZK009', '新战客', '冯琼']]), 'S');
+  const second = await (await preview(XLSX.write(smaller, { type: 'buffer', bookType: 'xlsx' }))).json();
+  assert.deepEqual([second.replacing, second.added, second.removed], [true, 1, 4]);
+  await request('/api/strategic/commit', { method: 'POST', body: { token: second.token } });
+  data = await (await request('/api/strategic?kpiMode=1')).json();
+  assert.deepEqual(data.groups.map((row) => row.groupCode).sort(), ['ZK002', 'ZK009']);
+  db.exec("DELETE FROM strategic_customer; DELETE FROM leased_line WHERE group_product_code LIKE 'ZKL%'");
 });
 
 test('existing forecasts marked as landed count as fully landed after the upgrade', () => {

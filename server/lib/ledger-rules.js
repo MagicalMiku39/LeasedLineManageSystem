@@ -2,6 +2,7 @@
 export const normalStatus = '正常在用';
 export const stoppingStatus = '停机执行中';
 export const stoppedStatus = '停机';
+export const temporaryStatus = '临时生成资料';
 export const billableStatuses = [normalStatus, stoppingStatus, stoppedStatus];
 export const addedStatuses = [
   '欠费销户',

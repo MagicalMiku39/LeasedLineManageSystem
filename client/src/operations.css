@@ -89,6 +89,20 @@
 .kpi-suggestions em { color: var(--red); font-style: normal; }
 .kpi-suggestion-actions { display: flex; gap: 6px; }
 .kpi-suggestion-actions button { height: 30px; padding: 0 11px; font-size: 13px; }
+.strategic-page { max-width: none; padding: 0; }
+.strategic-preview { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 8px 14px; margin: 0 0 12px; font-size: 13px; }
+.strategic-preview dt { color: var(--muted); }
+.strategic-preview dd { margin: 0; overflow-wrap: anywhere; }
+.strategic-status-penetrated { background: #e8f4ec; color: #167d4a; }
+.strategic-status-lost { background: #fdecec; color: #c13532; }
+.strategic-page .rev-group-filters > select { width: auto; min-width: 160px; }
+.strategic-page .rev-empty > button { margin: 8px auto 0; }
+.strategic-page .rev-import-file > button { flex-shrink: 0; height: auto; min-height: 0; padding: 8px 12px; gap: 6px; font-size: 13px; }
+@media (max-width: 640px) {
+  .strategic-page .rev-group-filters > select { width: 100%; }
+  .strategic-page .rev-import-file > div { flex-basis: 100%; }
+  .strategic-page .rev-import-file > button { margin-bottom: 10px; }
+}
 .kpi-latest-note { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
 .kpi-progress-dialog { width: min(560px, 100%); }
 .kpi-progress-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--line); }

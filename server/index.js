@@ -7,7 +7,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { db, nowIso } from './lib/db.js';
+import { db, dbPath, nowIso } from './lib/db.js';
+import { createBackupRouter, createBackupService } from './lib/backup.js';
 import { editableFields } from './lib/field-map.js';
 import { importExcel } from './lib/import-excel.js';
 import { lastImportAt, listBatchChanges, listLineChanges } from './lib/ledger-changes.js';
@@ -25,6 +26,7 @@ import XLSX from './lib/xlsx.js';
 import { createRevenueRouter } from './lib/revenue.js';
 import { createWarningsRouter } from './lib/warnings.js';
 import { createKpiRouter } from './lib/kpi.js';
+import { createStrategicRouter } from './lib/strategic.js';
 import { clientCertPaths, createClientCertListener, requestSource } from './lib/client-cert.js';
 import { readClientCertSettings } from './lib/client-cert-admin.js';
 import { createClientCertRouter } from './lib/client-cert-router.js';
@@ -55,6 +57,7 @@ if (httpsEnabled && process.env.AUTH_COOKIE_SECURE === undefined) {
 }
 
 mkdirSync(uploadDir, { recursive: true });
+const backups = createBackupService({ db, dbPath });
 
 const maxLedgerUploadMb = 32;
 const upload = multer({ dest: uploadDir, limits: { fileSize: maxLedgerUploadMb * 1024 * 1024, files: 1 } });
@@ -391,15 +394,26 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, time: nowIso() });
 });
 
-app.post('/api/import', receiveLedgerFile, (req, res) => {
+app.post('/api/import', receiveLedgerFile, async (req, res) => {
   if (!req.file) {
     res.status(400).json({ error: '请上传 Excel 文件' });
     return;
   }
 
+  const fileName = normalizeUploadedFilename(req.file.originalname);
+  // A failed backup is reported but does not hold the import up.
+  let backup = null;
+  let backupError = '';
   try {
-    const result = importExcel(req.file.path, normalizeUploadedFilename(req.file.originalname));
-    res.json({ ...result, forecastSuggestions: kpiRouter.countSuggestions() });
+    backup = await backups.create('ledger-import', { detail: fileName, createdBy: currentUser(req)?.username || '' });
+  } catch (error) {
+    backupError = error.message;
+    console.error(`Backup before import failed: ${error.message}`);
+  }
+
+  try {
+    const result = importExcel(req.file.path, fileName);
+    res.json({ ...result, forecastSuggestions: kpiRouter.countSuggestions(), backup: backup?.name ?? null, backupError });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -959,6 +973,7 @@ app.use('/api/settings/client-certs', createClientCertRouter({
   logEvent: logSecurityEvent
 }));
 app.get('/api/settings/security-log', securityLogHandler);
+app.use('/api/settings/backups', createBackupRouter({ backups, currentUser, verifyCode: verifyUserCode, logEvent: logSecurityEvent }));
 const kpiRouter = createKpiRouter({
   db,
   leasedLineSource,
@@ -969,6 +984,13 @@ const kpiRouter = createKpiRouter({
   productTypes: kpiProductNames
 });
 app.use('/api/kpi', kpiRouter);
+app.use('/api/strategic', createStrategicRouter({
+  db,
+  leasedLineSource,
+  currentUser,
+  normalizeFileName: normalizeUploadedFilename,
+  beforeReplace: (req, fileName) => backups.create('strategic-import', { detail: fileName, createdBy: currentUser(req)?.username || '' })
+}));
 
 if (existsSync(distDir)) {
   app.use(express.static(distDir));
@@ -978,6 +1000,7 @@ if (existsSync(distDir)) {
 }
 
 export function startServer() {
+backups.startWeekly();
 if (httpsEnabled) {
   const httpsOptions = httpsPfxFile
     ? { pfx: readFileSync(httpsPfxFile), passphrase: httpsPfxPassphrase }

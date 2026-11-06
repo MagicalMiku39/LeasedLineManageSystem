@@ -1,10 +1,13 @@
 import { db } from './db.js';
 import {
   addedStatuses,
+  billableStatuses,
   cancelledStatuses,
   kpiProductSqlList,
+  normalStatus,
   stoppedStatus,
-  stoppingStatus
+  stoppingStatus,
+  temporaryStatus
 } from './ledger-rules.js';
 
 const defaultPageSize = 100;
@@ -42,8 +45,15 @@ function text(value) {
   return value === undefined || value === null ? '' : String(value);
 }
 
-function statusChangeType(next) {
-  if (cancelledStatuses.includes(next)) return 'cancelled';
+/**
+ * 转正常: 临时生成资料 → 正常在用. 转复机: 停机 or 停机执行中 → 正常在用. 转销户: from a line in
+ * service (正常在用, 停机执行中, 停机) to a cancelled status, so 销户(订单处理中) → 正式销户 is not
+ * counted twice. 转停机: to 停机 or 停机执行中. Anything else is 其他状态变化.
+ */
+export function statusChangeType(previous, next) {
+  if (previous === temporaryStatus && next === normalStatus) return 'normalized';
+  if ((previous === stoppedStatus || previous === stoppingStatus) && next === normalStatus) return 'resumed';
+  if (billableStatuses.includes(previous) && cancelledStatuses.includes(next)) return 'cancelled';
   if (next === stoppedStatus || next === stoppingStatus) return 'stopped';
   return 'status';
 }
@@ -63,7 +73,7 @@ export function diffLine(existing, record) {
 
   const statusChanged = text(existing.product_status_name) !== text(record.product_status_name);
   if (statusChanged) {
-    compare(statusChangeType(record.product_status_name), 'product_status_name', record.product_status_name, record.status_time ? `状态时间 ${record.status_time}` : '');
+    compare(statusChangeType(text(existing.product_status_name), text(record.product_status_name)),'product_status_name', record.product_status_name, record.status_time ? `状态时间 ${record.status_time}` : '');
   }
   compare('manager', 'manager_name');
   compare('manager', 'manager_job_no');

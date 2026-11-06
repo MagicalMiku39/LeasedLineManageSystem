@@ -10,7 +10,8 @@ const maxPageSize = 200;
 const categories = {
   login: ['login_success', 'login_failed', 'login_locked'],
   code: ['code_failed', 'code_locked'],
-  cert: ['ca_created', 'port_changed', 'cert_issued', 'cert_revoked']
+  cert: ['ca_created', 'port_changed', 'cert_issued', 'cert_revoked'],
+  backup: ['backup_created', 'backup_downloaded', 'backup_restored']
 };
 
 db.exec(`

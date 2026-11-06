@@ -130,12 +130,31 @@ sudo systemctl restart leased-line
 
 ```text
 data/ledger.db
+data/backups/
 uploads/
 ```
 
 这些是运行期数据，不会进入 Git。跨设备迁移时默认不复制数据库；需要数据时建议在新服务器重新导入 Excel。
 
 管理员账号、密码哈希、Google Authenticator 密钥和登录会话也保存在 `data/ledger.db` 中。因此不同服务器默认需要单独初始化管理员。
+
+### 自动备份
+
+每次导入到达日清单、替换战客清单之前，以及每周一次（服务启动约 2 分钟后检查，距上次每周备份满 7 天即备份），系统把整个数据库压缩备份到 `data/backups/`，可以用环境变量 `BACKUP_DIR` 指定其他目录。每份约为数据库的 7%，按类别保留最近若干份：导入前 30 份、替换战客清单前 10 份、每周 12 份、手动 10 份。剩余空间不足数据库的 1.5 倍时不备份，导入仍会进行，页面会提示备份失败。
+
+备份列表、立即备份和下载在“设置 → 数据备份”。备份包含账号和 Google Authenticator 密钥，下载需要输入验证码，并记入安全日志。
+
+导错文件时，在备份列表中点“回退”：选择回退“台账类数据”（台账、导入记录、变更记录、手工修改记录、预警标记、KPI 预计任务及其落地确认和进展）或“战客清单”，先看会撤销哪些导入和多少条记录，再输入验证码确认。回退前系统会先把当前数据备份为“回退前”，回退到它就能撤销这次回退。账号、安全日志、收入数据、KPI 目标、已发送的邮件记录不会被回退。回退不需要重启服务。
+
+这些备份和数据库在同一块磁盘上，只能防误操作。请定期把 `data/backups/` 中最新的一份复制到服务器以外的地方。服务器或数据库文件损坏时，才需要用整份备份替换数据库：停止服务，解压后替换 `data/ledger.db`（同时删除旧的 `ledger.db-wal`、`ledger.db-shm`），再启动。整份替换会连同账号和安全日志一起回到备份时的状态：
+
+```bash
+sudo systemctl stop leased-line
+cp data/ledger.db data/ledger-before-restore.db
+gunzip -c data/backups/ledger-备份文件名.db.gz > data/ledger.db
+rm -f data/ledger.db-wal data/ledger.db-shm
+sudo systemctl start leased-line
+```
 
 ## 10. Agent Mail 邮件授权与抄送
 

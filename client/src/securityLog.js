@@ -2,7 +2,8 @@ export const securityLogCategories = [
   { value: '', label: '全部事件' },
   { value: 'login', label: '登录' },
   { value: 'code', label: '设置页验证码' },
-  { value: 'cert', label: '证书与端口' }
+  { value: 'cert', label: '证书与端口' },
+  { value: 'backup', label: '数据备份' }
 ];
 
 export const securityEventLabels = {
@@ -14,7 +15,10 @@ export const securityEventLabels = {
   ca_created: '创建证书机构',
   port_changed: '修改端口设置',
   cert_issued: '签发证书',
-  cert_revoked: '吊销证书'
+  cert_revoked: '吊销证书',
+  backup_created: '手动备份',
+  backup_downloaded: '下载备份',
+  backup_restored: '回退数据'
 };
 
 const alertEvents = new Set(['login_failed', 'login_locked', 'code_failed', 'code_locked']);

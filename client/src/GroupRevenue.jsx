@@ -34,13 +34,13 @@ function useResource(path, revision) {
   return state;
 }
 
-function Notice({ children, error = false }) {
+export function Notice({ children, error = false }) {
   return <div className={`rev-notice${error ? ' rev-error' : ''}`} role={error ? 'alert' : 'status'}><CircleAlert size={17} /><div>{children}</div></div>;
 }
-function Loader() {
+export function Loader() {
   return <div className="rev-skeleton" role="status" aria-label="正在加载收入数据"><div /><div /><div /><div /><span className="rev-sr-only">加载中</span></div>;
 }
-function Metric({ label, value, note, className = '' }) {
+export function Metric({ label, value, note, className = '' }) {
   return <div className={`rev-metric ${className}`}><span>{label}</span><strong>{value}</strong>{note && <small>{note}</small>}</div>;
 }
 function Metrics({ data }) {
@@ -52,7 +52,7 @@ function Metrics({ data }) {
   </section>;
 }
 
-function DataTable({ rows, columns, rowKey, initialSort, empty = '暂无记录', pageSize = 30 }) {
+export function DataTable({ rows, columns, rowKey, initialSort, empty = '暂无记录', pageSize = 30 }) {
   const [sort, setSort] = useState({ key: initialSort || columns[0].key, direction: 'desc' });
   const [page, setPage] = useState(1);
   const sorted = useMemo(() => [...rows].sort((a, b) => {

@@ -1,6 +1,7 @@
 import React, { useEffect, useImperativeHandle, useMemo, useState } from 'react';
 import { Bell, BellOff, Mail, Search } from 'lucide-react';
 import KpiAchievement from './KpiAchievement.jsx';
+import StrategicCustomers from './StrategicCustomers.jsx';
 import { WarningMailDialog, WarningMailSettings } from './WarningMail.jsx';
 import { beijingDate, money } from './utils.js';
 import './operations.css';
@@ -9,13 +10,14 @@ const labels = { unmarked: '未标注', remind: '提醒', ignore: '忽略' };
 const levels = { green: '绿色 · 0–89 天', yellow: '黄色 · 90–149 天', red: '红色 · 150–179 天', cancel: '待销户 · ≥180 天' };
 const sections = [
   { key: 'warnings', label: '欠费销户预警' },
-  { key: 'kpi', label: 'KPI达成' }
+  { key: 'kpi', label: 'KPI达成' },
+  { key: 'strategic', label: '战客专线渗透' }
 ];
 
-// The operations centre: a sub-menu over its sections. The shared top-bar refresh and export
-// act on the section that is open (each one takes the ref).
-export default function Operations({ ref, kpiMode, refreshToken, onOpenLine }) {
-  const [section, setSection] = useState('warnings');
+// The operations centre: a sub-menu over its sections. The shared top-bar refresh, export and
+// (where a section has its own list to import) import act on the section that is open.
+export default function Operations({ ref, kpiMode, refreshToken, onOpenLine, section = 'warnings', onSectionChange }) {
+  const setSection = (key) => onSectionChange?.(key);
   return <main className="operations-page">
     <nav className="operations-tabs" aria-label="运营中心">
       {sections.map(({ key, label }) => (
@@ -24,7 +26,9 @@ export default function Operations({ ref, kpiMode, refreshToken, onOpenLine }) {
     </nav>
     {section === 'kpi'
       ? <KpiAchievement ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} />
-      : <ArrearsWarnings ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} onOpenLine={onOpenLine} />}
+      : section === 'strategic'
+        ? <StrategicCustomers ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} onOpenLine={onOpenLine} />
+        : <ArrearsWarnings ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} onOpenLine={onOpenLine} />}
   </main>;
 }
 

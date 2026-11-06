@@ -1,14 +1,77 @@
+.settings-layout {
+  display: grid;
+  grid-template-columns: 196px minmax(0, 1fr);
+  gap: 40px;
+  align-items: start;
+}
+
+.settings-nav {
+  position: sticky;
+  top: 104px;
+  display: grid;
+  gap: 2px;
+}
+
+.settings-nav button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.settings-nav button:hover {
+  color: var(--ink);
+  background: rgba(0, 0, 0, .04);
+}
+
+.settings-nav button[aria-current="page"] {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.settings-content {
+  min-width: 0;
+}
+
+.settings-content-heading {
+  padding-bottom: 20px;
+}
+
+.settings-content-heading h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.settings-content-heading p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .settings-section {
   display: grid;
-  grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+  grid-template-columns: minmax(200px, 280px) minmax(0, 1fr);
   gap: 32px;
   padding: 24px 0;
   border-top: 1px solid var(--line);
 }
 
-.settings-label h3 {
+.settings-label h4 {
   margin: 0;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
 }
 
@@ -129,6 +192,11 @@
   background: transparent;
 }
 
+.settings-table .numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .settings-inactive td:first-child {
   color: var(--muted);
 }
@@ -157,6 +225,108 @@
 .settings-log-scroll {
   max-height: 480px;
   border-top: 1px solid var(--rule);
+}
+
+.settings-restore {
+  width: min(560px, 100%);
+}
+
+.settings-scope {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 0;
+  border: 0;
+}
+
+.settings-scope legend {
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.settings-dialog .settings-scope-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.settings-dialog .settings-scope-option input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  padding: 0;
+  border: 0;
+  box-shadow: none; /* taste-skill-ignore: removes the text-input shadow from the radio */
+  appearance: auto;
+  accent-color: var(--accent);
+}
+
+.settings-scope-option span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-scope-option small {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.settings-restore-scroll {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.settings-restore-scroll .settings-table {
+  min-width: 0;
+}
+
+.settings-restore-scroll th,
+.settings-restore-scroll td {
+  white-space: normal;
+}
+
+.settings-changed {
+  font-weight: 600;
+}
+
+.settings-dialog .settings-restore-same {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.settings-restore-notes {
+  margin: 12px 0 16px;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.settings-restored {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+.settings-panel > .table-scroll.settings-backup-scroll {
+  margin-top: 16px;
+  border-top: 1px solid var(--rule);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
 }
 
 .settings-row-actions {
@@ -211,10 +381,45 @@
   margin: 16px 0;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .settings-section {
     grid-template-columns: minmax(0, 1fr);
     gap: 12px;
+  }
+}
+
+@media (max-width: 760px) {
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .settings-nav {
+    position: static;
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .settings-nav button {
+    flex: none;
+    height: 34px;
+    padding: 0 10px;
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 420px) {
+  .settings-nav button {
+    flex: 1 1 auto;
+    justify-content: center;
+    padding: 0 8px;
+  }
+
+  .settings-nav button svg {
+    display: none;
   }
 }
 

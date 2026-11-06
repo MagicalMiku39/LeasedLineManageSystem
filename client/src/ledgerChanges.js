@@ -3,6 +3,8 @@ import { beijingDate } from './utils.js';
 // In the order they are shown. The tone follows the ledger's own: new is green, cancelled red.
 export const changeTypes = [
   { key: 'added', label: '新增', tone: 'net-positive' },
+  { key: 'normalized', label: '转正常' },
+  { key: 'resumed', label: '转复机' },
   { key: 'cancelled', label: '转销户', tone: 'net-negative' },
   { key: 'stopped', label: '转停机' },
   { key: 'status', label: '其他状态变化' },

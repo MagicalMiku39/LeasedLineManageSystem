@@ -60,6 +60,7 @@ function App() {
   const [showBatch, setShowBatch] = useState(false);
   const revenueActions = useRef(null);
   const operationsActions = useRef(null);
+  const [operationsSection, setOperationsSection] = useState('warnings');
   const [revenueRevision, setRevenueRevision] = useState(0);
   const [operationsRevision, setOperationsRevision] = useState(0);
   const [importsRevision, setImportsRevision] = useState(0);
@@ -124,8 +125,8 @@ function App() {
       const data = await requestJson('/import', { method: 'POST', body: formData });
       const changes = changeSummaryText(data.changes);
       setNotice({
-        tone: data.failedRows > 0 ? 'error' : 'success',
-        text: `${file.name} 导入完成：新增 ${data.successRows} 条，更新 ${data.updatedRows} 条，失败 ${data.failedRows} 条${data.failedRows > 0 ? '，失败原因见“导入记录”' : ''}${changes ? `。${changes}，明细见“导入记录”` : ''}${data.forecastSuggestions > 0 ? `。有 ${data.forecastSuggestions} 条专线可能对应预计任务，请到“KPI达成”确认` : ''}`
+        tone: data.failedRows > 0 || data.backupError ? 'error' : 'success',
+        text: `${file.name} 导入完成：新增 ${data.successRows} 条，更新 ${data.updatedRows} 条，失败 ${data.failedRows} 条${data.failedRows > 0 ? '，失败原因见“导入记录”' : ''}${changes ? `。${changes}，明细见“导入记录”` : ''}${data.forecastSuggestions > 0 ? `。有 ${data.forecastSuggestions} 条专线可能对应预计任务，请到“KPI达成”确认` : ''}${data.backupError ? `。注意：导入前的自动备份没有成功（${data.backupError}），请到“设置”查看` : ''}`
       });
       setOperationsRevision((value) => value + 1);
       setImportsRevision((value) => value + 1);
@@ -177,7 +178,9 @@ function App() {
   // What the shared top-bar actions do on each page.
   const importAction = activeView === 'revenue'
     ? { kind: 'dialog', title: '导入收入报表', open: () => revenueActions.current?.openImport() }
-    : { kind: 'file', title: '导入专线台账 Excel', busy: uploading, onFile: uploadLedgerExcel };
+    : activeView === 'operations' && operationsSection === 'strategic'
+      ? { kind: 'dialog', title: '导入战客清单', open: () => operationsActions.current?.openImport?.() }
+      : { kind: 'file', title: '导入专线台账 Excel', busy: uploading, onFile: uploadLedgerExcel };
 
   const exportActions = {
     operations: { title: '导出运营中心当前页面', run: () => operationsActions.current?.exportData() },
@@ -219,7 +222,7 @@ function App() {
   function renderView() {
     switch (activeView) {
       case 'operations':
-        return <Operations ref={operationsActions} kpiMode={kpiMode} refreshToken={operationsRevision} onOpenLine={openDetail} />;
+        return <Operations ref={operationsActions} kpiMode={kpiMode} refreshToken={operationsRevision} onOpenLine={openDetail} section={operationsSection} onSectionChange={setOperationsSection} />;
       case 'revenue':
         return (
           <GroupRevenue
@@ -234,7 +237,19 @@ function App() {
       case 'imports':
         return <ImportRecords refreshToken={importsRevision} onOpenLine={openDetail} />;
       case 'settings':
-        return <Settings refreshToken={settingsRevision} />;
+        return (
+          <Settings
+            refreshToken={settingsRevision}
+            onDataRestored={() => {
+              // Every page shows data the rollback may have changed.
+              reloadLedgerPage();
+              reloadOptions();
+              setOperationsRevision((value) => value + 1);
+              setImportsRevision((value) => value + 1);
+              setRevenueRevision((value) => value + 1);
+            }}
+          />
+        );
       case 'managers':
         return (
           <ManagerDashboard
