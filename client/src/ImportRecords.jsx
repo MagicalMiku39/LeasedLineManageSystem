@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { FileSpreadsheet, ListChecks } from 'lucide-react';
 import { isAbort, requestJson } from './api.js';
 import { InlineError } from './components/Feedback.jsx';
@@ -21,11 +21,21 @@ function StatusRow({ colSpan, children }) {
 }
 
 // Ledger import batches. Reloads whenever the top bar refreshes or a new ledger file is imported.
-export default function ImportRecords({ refreshToken, onOpenLine }) {
+export default function ImportRecords({ refreshToken, onOpenLine, focus = null, tabs = null }) {
   const [imports, setImports] = useState({ rows: [], loading: true, error: '' });
   const [retry, setRetry] = useState(0);
   const [selectedBatch, setSelectedBatch] = useState(null);
   const [detail, setDetail] = useState({ rows: [], loading: false, error: '' });
+  const appliedFocus = useRef(null);
+
+  // Arriving from the 工作台 opens that import's changes once the list is in, once per request.
+  useEffect(() => {
+    if (!focus?.batchId || appliedFocus.current === focus) return;
+    const batch = imports.rows.find((item) => item.id === focus.batchId);
+    if (!batch) return;
+    appliedFocus.current = focus;
+    setSelectedBatch(batch);
+  }, [focus, imports.rows]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -53,7 +63,8 @@ export default function ImportRecords({ refreshToken, onOpenLine }) {
   const showImportsEmpty = !imports.loading && !imports.error && imports.rows.length === 0;
 
   return (
-    <main className="page">
+    <main className="page imports-page">
+      {tabs}
       <div className="page-heading">
         <h2>导入记录</h2>
         <p>台账 Excel 的每次导入；点击一条记录查看这次改了什么，以及逐行处理结果。</p>

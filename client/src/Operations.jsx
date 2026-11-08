@@ -1,5 +1,6 @@
 import React, { useEffect, useImperativeHandle, useMemo, useState } from 'react';
 import { Bell, BellOff, Mail, Search } from 'lucide-react';
+import SubTabs from './components/SubTabs.jsx';
 import KpiAchievement from './KpiAchievement.jsx';
 import StrategicCustomers from './StrategicCustomers.jsx';
 import { WarningMailDialog, WarningMailSettings } from './WarningMail.jsx';
@@ -16,18 +17,13 @@ const sections = [
 
 // The operations centre: a sub-menu over its sections. The shared top-bar refresh, export and
 // (where a section has its own list to import) import act on the section that is open.
-export default function Operations({ ref, kpiMode, refreshToken, onOpenLine, section = 'warnings', onSectionChange }) {
-  const setSection = (key) => onSectionChange?.(key);
+export default function Operations({ ref, kpiMode, refreshToken, onOpenLine, section = 'warnings', onSectionChange, strategicFocus }) {
   return <main className="operations-page">
-    <nav className="operations-tabs" aria-label="运营中心">
-      {sections.map(({ key, label }) => (
-        <button key={key} type="button" className={section === key ? 'active' : undefined} aria-current={section === key ? 'page' : undefined} onClick={() => setSection(key)}>{label}</button>
-      ))}
-    </nav>
+    <SubTabs label="运营中心" items={sections} active={section} onChange={(key) => onSectionChange?.(key)} />
     {section === 'kpi'
       ? <KpiAchievement ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} />
       : section === 'strategic'
-        ? <StrategicCustomers ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} onOpenLine={onOpenLine} />
+        ? <StrategicCustomers ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} onOpenLine={onOpenLine} focus={strategicFocus} />
         : <ArrearsWarnings ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} onOpenLine={onOpenLine} />}
   </main>;
 }

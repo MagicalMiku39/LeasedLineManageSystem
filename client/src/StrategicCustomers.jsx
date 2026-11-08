@@ -194,7 +194,7 @@ function GroupDetail({ data, onOpenLine }) {
  * (已渗透), had them and lost them all (已流失), or never had any (未渗透); by group, or as a
  * penetration report per manager.
  */
-export default function StrategicCustomers({ ref, kpiMode, refreshToken, onOpenLine }) {
+export default function StrategicCustomers({ ref, kpiMode, refreshToken, onOpenLine, focus }) {
   const [revision, setRevision] = useState(0);
   const [view, setView] = useState('groups');
   const [manager, setManager] = useState(null);
@@ -209,6 +209,13 @@ export default function StrategicCustomers({ ref, kpiMode, refreshToken, onOpenL
   const overview = useStrategic(`/strategic?${query}`, `${revision}:${refreshToken}`);
   const detail = useStrategic(group ? `/strategic/groups/${encodeURIComponent(group)}?${query}` : null, `${revision}:${refreshToken}`);
   const refresh = () => setRevision((value) => value + 1);
+
+  // Another page (the 工作台) can open one group directly; each request carries its own nonce.
+  useEffect(() => {
+    if (!focus?.groupCode) return;
+    setManager(null);
+    setGroup(focus.groupCode);
+  }, [focus]);
 
   const all = overview.data?.groups || [];
   const scoped = useMemo(() => all.filter((row) => (manager === null

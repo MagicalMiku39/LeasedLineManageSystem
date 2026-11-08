@@ -1,0 +1,37 @@
+.workbench-page .rev-context { margin-top: 0; }
+
+.workbench-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 40px; }
+
+.workbench-todos { margin: 0; padding: 0; list-style: none; border-top: 1px solid #e0e0e5; }
+.workbench-todo { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 16px; padding: 14px 0; border-bottom: 1px solid #ebebee; }
+.workbench-todo > div { display: grid; gap: 4px; }
+.workbench-todo > div > span { font-size: 14px; color: #242428; }
+.workbench-todo small { font-size: 12px; line-height: 1.5; color: #686872; }
+.workbench-todo > strong { min-width: 36px; text-align: right; font-size: 22px; font-weight: 600; color: #8a8a93; }
+.workbench-todo > strong.workbench-count-open { color: #242428; }
+.workbench-todo button, .workbench-footer button { display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 10px; font-size: 13px; white-space: nowrap; }
+
+.workbench-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid #e0e0e5; border-left: 1px solid #ebebee; }
+.workbench-tile { display: grid; gap: 6px; padding: 14px 14px 12px; border-right: 1px solid #ebebee; border-bottom: 1px solid #ebebee; background: #fff; }
+.workbench-tile > span { font-size: 12px; color: #62626c; }
+.workbench-tile > strong { font-size: 20px; font-weight: 600; line-height: 1.2; }
+/* Seven tiles: the last one spans two cells so both the 4- and 2-column grids end flush. */
+.workbench-tile:last-child { grid-column: span 2; }
+
+.workbench-note { margin: 12px 0 0; font-size: 12px; line-height: 1.6; color: #62626c; }
+.workbench-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-top: 14px; font-size: 13px; color: #3a3a40; }
+.workbench-footer .workbench-note { margin: 0; }
+
+.workbench-lines { display: grid; gap: 2px; font-size: 12px; line-height: 1.5; color: #3a3a40; }
+
+.workbench-empty { display: grid; justify-items: center; gap: 10px; padding: 32px 16px; border-top: 1px solid #e0e0e5; color: #6e6e73; text-align: center; font-size: 13px; }
+
+@media (max-width: 1100px) {
+  .workbench-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 640px) {
+  .workbench-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .workbench-todo { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; }
+  .workbench-todo > button { grid-column: 1 / -1; justify-self: start; }
+}

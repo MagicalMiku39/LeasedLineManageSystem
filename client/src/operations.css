@@ -44,9 +44,6 @@
 .warning-mail-body { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 13px; line-height: 1.8; background: #f6f7f9; padding: 16px; border-radius: 4px; max-height: 46dvh; overflow: auto; }
 .warning-mail-footer { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
 .warning-mail-history { font-size: 12px; color: #686d76; overflow-wrap: anywhere; }
-.operations-tabs { display: flex; gap: 4px; padding: 3px; margin-bottom: 4px; width: fit-content; max-width: 100%; overflow-x: auto; border-radius: 999px; background: #ececf0; }
-.operations-tabs button { height: 32px; border: 0; background: transparent; color: var(--muted); font-size: 13px; }
-.operations-tabs button.active { background: var(--surface); color: var(--ink); font-weight: 600; }
 
 /* ---------- KPI 达成 ---------- */
 .kpi-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; }

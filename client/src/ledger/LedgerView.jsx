@@ -158,13 +158,15 @@ export default function LedgerView({
   ledger,
   columns,
   onBatchEdit,
-  onOpenRow
+  onOpenRow,
+  tabs = null
 }) {
   const advancedFilterCount = countActiveFilters(filters, advancedFilterKeys);
   const filtered = hasAnyFilter(filters);
 
   return (
     <main className="page ledger-page">
+      {tabs}
       <LedgerOverview
         stats={stats}
         statsError={statsError}

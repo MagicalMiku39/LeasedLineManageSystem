@@ -154,9 +154,8 @@ export function createStrategicRouter({ db, leasedLineSource, currentUser, norma
     return 'untouched';
   }
 
-  router.get('/', (req, res) => {
-    const source = leasedLineSource(req.query);
-    const groups = db.prepare(
+  function groupRows(source) {
+    return db.prepare(
       `WITH lines AS (
          SELECT l.group_code, l.group_name, ${status} AS status, ${monthlyFee} AS fee, l.start_time, l.status_time
          FROM ${source} l
@@ -180,7 +179,53 @@ export function createStrategicRouter({ db, leasedLineSource, currentUser, norma
        LEFT JOIN totals t ON t.group_code = s.group_code`
     ).all(...inService, ...cancelledStatuses, ...inService, ...cancelledStatuses, ...inService)
       .map((row) => ({ ...row, status: classify(row) }));
+  }
 
+  /**
+   * Strategic groups whose penetration changed with one import. The state before it is the state
+   * now with that import's status changes and new lines taken back out, so it needs the import's
+   * change record and assumes nothing changed the lines since (true for the latest import).
+   */
+  router.importChanges = (batchId, query) => {
+    const source = leasedLineSource(query);
+    const listed = db.prepare('SELECT COUNT(*) AS count FROM strategic_customer').get().count > 0;
+    if (!listed) return { listed, changes: [] };
+    const lines = db.prepare(
+      `SELECT l.id, l.group_code, l.group_product_code, l.product_name, c.change_type, c.old_value, ${status} AS status_now
+       FROM ledger_change c
+       JOIN ${source} l ON l.id = c.line_id
+       WHERE c.batch_id = ? AND l.group_code IN (SELECT group_code FROM strategic_customer)
+         AND (c.change_type = 'added' OR c.field_name = 'product_status_name')
+       ORDER BY c.id`
+    ).all(batchId);
+    if (!lines.length) return { listed, changes: [] };
+    const active = (value) => (inService.includes(value) ? 1 : 0);
+    const cancelled = (value) => (cancelledStatuses.includes(value) ? 1 : 0);
+    const byGroup = new Map();
+    for (const line of lines) {
+      const before = line.change_type === 'added' ? null : line.old_value ?? '';
+      const activeMoved = active(line.status_now) - active(before);
+      const cancelledMoved = cancelled(line.status_now) - cancelled(before);
+      if (!activeMoved && !cancelledMoved) continue;
+      const entry = byGroup.get(line.group_code) || { active: 0, cancelled: 0, lines: [] };
+      entry.active += activeMoved;
+      entry.cancelled += cancelledMoved;
+      entry.lines.push({ id: line.id, groupProductCode: line.group_product_code, productName: line.product_name, before, after: line.status_now });
+      byGroup.set(line.group_code, entry);
+    }
+    const changes = groupRows(source)
+      .filter((group) => byGroup.has(group.groupCode))
+      .map((group) => {
+        const entry = byGroup.get(group.groupCode);
+        const from = classify({ activeLines: group.activeLines - entry.active, cancelledLines: group.cancelledLines - entry.cancelled });
+        return { groupCode: group.groupCode, groupName: group.groupName, managerName: group.managerName, from, to: group.status, activeLines: group.activeLines, lines: entry.lines };
+      })
+      .filter((change) => change.from !== change.to);
+    return { listed, changes };
+  };
+
+  router.get('/', (req, res) => {
+    const groups = groupRows(leasedLineSource(req.query));
     const count = (key) => groups.filter((row) => row.status === key).length;
     const total = groups.length;
     res.json({

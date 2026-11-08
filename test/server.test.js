@@ -1020,6 +1020,65 @@ test('strategic customer list sorts groups into penetrated, lost and untouched',
   db.exec("DELETE FROM strategic_customer; DELETE FROM leased_line WHERE group_product_code LIKE 'ZKL%'");
 });
 
+test('the workbench sums up the latest import, KPI progress, open warnings and strategic changes', async () => {
+  const path = join(tempDir, 'workbench.xlsx');
+  const year = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric' }).format(new Date());
+  const line = (code, values = {}) => ({
+    '集团编码': 'WB1', '集团名称': '工作台集团', '集团产品编码': code, '产品名称': '互联网专线',
+    '产品状态名称': '正常在用', '客户经理名称': '甲', '客户经理工号': 'A1', '开始时间': `${year}-02-01`, '活动套餐资费': '100', ...values
+  });
+  function importRows(rows) {
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(rows.map((row) => Object.fromEntries(excelHeaders.map((header) => [header, row[header] ?? '']))), { header: excelHeaders }), 'Sheet1');
+    XLSX.writeFile(book, path);
+    return importer.importExcel(path, 'workbench.xlsx');
+  }
+  db.exec("INSERT INTO strategic_customer (group_code, group_name, manager_name) VALUES ('WB1', '战客甲', '冯琼'), ('WB2', '战客乙', '王倩'), ('WB3', '战客丙', '王倩')");
+  importRows([line('WBL1'), line('WBL3', { '集团编码': 'WB3' })]);
+  const latest = importRows([
+    line('WBL1', { '产品状态名称': '正式销户', '状态时间': `${year}-03-01` }),
+    line('WBL2', { '集团编码': 'WB2' }),
+    line('WBL3', { '集团编码': 'WB3', '产品状态名称': '停机', '状态时间': `${year}-03-01`, '总欠费': '50' })
+  ]);
+
+  const read = async () => (await request('/api/workbench?kpiMode=1')).json();
+  const data = await read();
+  assert.equal(data.latestImport.id, latest.batchId);
+  assert.equal(data.latestImport.fileName, 'workbench.xlsx');
+  assert.deepEqual([data.latestImport.changes.counts.added, data.latestImport.changes.counts.cancelled, data.latestImport.changes.counts.stopped], [1, 1, 1]);
+
+  // WB1 lost its only line, WB2 got its first, WB3 still has a line in service (停机 counts).
+  assert.equal(data.strategic.listed, true);
+  const moves = Object.fromEntries(data.strategic.changes.map((row) => [row.groupCode, `${row.from}→${row.to}`]));
+  assert.deepEqual(moves, { WB1: 'penetrated→lost', WB2: 'untouched→penetrated' });
+  const wb1 = data.strategic.changes.find((row) => row.groupCode === 'WB1');
+  assert.deepEqual(wb1.lines.map((item) => [item.groupProductCode, item.before, item.after]), [['WBL1', '正常在用', '正式销户']]);
+  assert.equal(data.strategic.changes.find((row) => row.groupCode === 'WB2').lines[0].before, null, 'a new line has no state before');
+
+  // The KPI figures are the KPI page's own.
+  const kpi = await (await request('/api/kpi?kpiMode=1')).json();
+  assert.deepEqual(data.kpi.actual, kpi.actual);
+  assert.equal(data.kpi.target, kpi.target);
+  assert.equal(data.kpi.gap, kpi.target - kpi.actual.net);
+  assert.equal(data.kpi.gapAfterForecast, kpi.target - kpi.forecast.expectedNet);
+  assert.equal(data.kpi.perMonth, data.kpi.gap > 0 ? Math.ceil(data.kpi.gap / data.kpi.monthsLeft) : 0);
+  assert.ok(data.kpi.monthsLeft >= 1 && data.kpi.monthsLeft <= 12);
+
+  // An unmarked warning line counts until someone marks it.
+  const stopped = db.prepare("SELECT id FROM leased_line WHERE group_product_code = 'WBL3'").get().id;
+  assert.ok(data.warnings.unmarked >= 1);
+  assert.equal(data.warnings.unmarked, Object.values(data.warnings.byLevel).reduce((sum, value) => sum + value, 0));
+  await request(`/api/warnings/${stopped}`, { method: 'PATCH', body: { mark: 'remind' } });
+  assert.equal((await read()).warnings.unmarked, data.warnings.unmarked - 1);
+
+  // Without a strategic list there is nothing to compare.
+  db.exec("DELETE FROM strategic_customer WHERE group_code LIKE 'WB%'");
+  const withoutList = await read();
+  assert.deepEqual([withoutList.strategic.listed, withoutList.strategic.changes.length], [false, 0]);
+  assert.equal((await request('/api/workbench', {}, false)).status, 401);
+  db.exec("DELETE FROM line_warning_mark WHERE line_id IN (SELECT id FROM leased_line WHERE group_product_code LIKE 'WBL%'); DELETE FROM leased_line WHERE group_product_code LIKE 'WBL%'");
+});
+
 test('existing forecasts marked as landed count as fully landed after the upgrade', () => {
   const old = new DatabaseSync(':memory:');
   old.exec(`CREATE TABLE kpi_forecast (id INTEGER PRIMARY KEY AUTOINCREMENT, year INTEGER NOT NULL, month INTEGER NOT NULL,

@@ -1,15 +1,16 @@
 import React, { useCallback, useRef, useState } from 'react';
-import { Building2, ChevronDown, Download, FileSpreadsheet, History, ListChecks, LogOut, RefreshCw, Settings, Upload, UsersRound } from 'lucide-react';
+import { Building2, ChevronDown, Download, FileSpreadsheet, LayoutDashboard, ListChecks, LogOut, RefreshCw, Settings, Upload, UsersRound } from 'lucide-react';
 import { useDismiss } from './useDismiss.js';
 
+// The main menu. 导入记录 lives under 台账, and 设置 is the gear beside 退出.
 export const views = [
+  { key: 'workbench', label: '工作台', icon: LayoutDashboard },
   { key: 'ledger', label: '台账', icon: FileSpreadsheet },
   { key: 'managers', label: '客户经理', icon: UsersRound },
   { key: 'revenue', label: '集团收入', icon: Building2 },
-  { key: 'operations', label: '运营中心', icon: ListChecks },
-  { key: 'imports', label: '导入记录', icon: History },
-  { key: 'settings', label: '设置', icon: Settings }
+  { key: 'operations', label: '运营中心', icon: ListChecks }
 ];
+const menuOf = { imports: 'ledger' };
 
 // "导出" with several choices: each item is { key, label, hint, run }.
 function ExportMenu({ items }) {
@@ -59,6 +60,7 @@ export default function AppHeader({
   refreshTitle,
   onLogout
 }) {
+  const activeMenu = menuOf[activeView] || activeView;
   return (
     <header className="app-header">
       <div className="app-title">
@@ -70,8 +72,8 @@ export default function AppHeader({
           <button
             key={key}
             type="button"
-            className={activeView === key ? 'active' : ''}
-            aria-current={activeView === key ? 'page' : undefined}
+            className={activeMenu === key ? 'active' : ''}
+            aria-current={activeMenu === key ? 'page' : undefined}
             onClick={() => onSelectView(key)}
           >
             <Icon size={16} aria-hidden="true" /> {label}
@@ -106,6 +108,16 @@ export default function AppHeader({
         )}
         <button type="button" title={refreshTitle} onClick={onRefresh} aria-busy={refreshing}>
           <RefreshCw size={16} className={refreshing ? 'spin' : undefined} /> 刷新
+        </button>
+        <button
+          type="button"
+          className="icon-button settings-button"
+          title="设置"
+          aria-label="设置"
+          aria-pressed={activeView === 'settings'}
+          onClick={() => onSelectView('settings')}
+        >
+          <Settings size={17} />
         </button>
         <button type="button" onClick={onLogout}>
           <LogOut size={16} /> 退出

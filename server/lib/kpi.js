@@ -155,9 +155,10 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
   router.countSuggestions = () => forecastRows(currentPeriod().year)
     .reduce((sum, forecast) => sum + Math.min(suggestionsFor(forecast).length, forecast.remaining), 0);
 
-  router.get('/', (req, res) => {
+  /** The KPI page's figures; the workbench shows the same ones. */
+  router.overview = (query) => {
     const period = currentPeriod();
-    const source = leasedLineSource(req.query);
+    const source = leasedLineSource(query);
     const statusName = "COALESCE(product_status_name, ledger_status, '')";
     const range = [period.yearStart, period.nextYearStart];
 
@@ -187,7 +188,7 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     const forecastCancelled = total(pending.filter((row) => row.kind === 'cancelled'));
     const actualNet = added - cancelled;
 
-    res.json({
+    return {
       year: period.year,
       lastImportAt: db.prepare("SELECT MAX(imported_at) AS at FROM import_batch WHERE status = 'finished'").get().at ?? null,
       target: targetFor(period.year),
@@ -204,7 +205,11 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
       },
       managers,
       forecasts
-    });
+    };
+  };
+
+  router.get('/', (req, res) => {
+    res.json(router.overview(req.query));
   });
 
   // The current year's target, editable on the page.
