@@ -931,6 +931,60 @@ test('status changes are sorted into 转正常, 转复机, 转销户, 转停机 
   assert.deepEqual([change.type, change.oldValue, change.newValue], ['resumed', '停机', '正常在用']);
 });
 
+test('a database that ran the v2.1.4beta branch keeps its old tables aside and imports work', async () => {
+  const { createStrategicRouter } = await import('../server/lib/strategic.js');
+  const { default: express } = await import('express');
+  const old = new DatabaseSync(':memory:');
+  old.exec('PRAGMA foreign_keys = ON;');
+  // The beta's own tables, under the name the release uses too.
+  old.exec(`CREATE TABLE strategic_import (
+      id TEXT PRIMARY KEY, file_name TEXT NOT NULL, sheet_name TEXT NOT NULL,
+      created_by TEXT NOT NULL, created_at TEXT NOT NULL, committed_at TEXT,
+      status TEXT NOT NULL, base_id TEXT, rows_json TEXT NOT NULL,
+      source_rows INTEGER NOT NULL, duplicate_rows INTEGER NOT NULL);
+    CREATE TABLE strategic_group (
+      group_code TEXT PRIMARY KEY, group_name TEXT NOT NULL, manager_name TEXT NOT NULL,
+      region_name TEXT NOT NULL, extra_json TEXT NOT NULL, batch_id TEXT NOT NULL REFERENCES strategic_import(id));
+    INSERT INTO strategic_import VALUES ('B1', 'beta.xlsx', 'S', 'admin', 'x', 'x', 'committed', NULL, '[]', 1, 0);
+    INSERT INTO strategic_group VALUES ('G1', '旧战客', '甲', '', '{}', 'B1');
+    CREATE TABLE leased_line (id INTEGER PRIMARY KEY, group_code TEXT, group_name TEXT, group_product_code TEXT, group_user_name TEXT,
+      product_name TEXT, product_status_name TEXT, ledger_status TEXT, bandwidth TEXT, manager_name TEXT,
+      start_time TEXT, status_time TEXT, actual_monthly_fee REAL, package_fee REAL);
+    INSERT INTO leased_line (group_code, product_status_name, product_name) VALUES ('BG1', '正常在用', '互联网专线');`);
+  const deps = { db: old, leasedLineSource: () => 'leased_line', currentUser: () => ({ username: 'admin' }) };
+  const app = express();
+  app.use(express.json());
+  app.use('/s', createStrategicRouter(deps));
+  createStrategicRouter(deps); // A second start changes nothing.
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve) => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${server.address().port}/s`;
+  try {
+    const tables = old.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'strategic%' ORDER BY name").all().map((row) => row.name);
+    assert.deepEqual(tables, ['strategic_customer', 'strategic_group', 'strategic_import', 'strategic_import_v214beta']);
+    assert.equal(old.prepare('SELECT file_name FROM strategic_import_v214beta').get().file_name, 'beta.xlsx', 'the beta rows are kept');
+    assert.match(old.prepare("SELECT sql FROM sqlite_master WHERE name = 'strategic_group'").get().sql, /REFERENCES "?strategic_import_v214beta"?/);
+
+    const empty = await fetch(base);
+    assert.equal(empty.status, 200, await empty.clone().text());
+    assert.equal((await empty.json()).list, null);
+
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([['集团编码', '集团名称', '客户经理'], ['BG1', '战客', '冯琼']]), 'S');
+    const form = new FormData();
+    form.append('file', new Blob([XLSX.write(book, { type: 'buffer', bookType: 'xlsx' })]), 'zk.xlsx');
+    const { token } = await (await fetch(`${base}/preview`, { method: 'POST', body: form })).json();
+    const committed = await fetch(`${base}/commit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
+    assert.equal(committed.status, 200);
+    const listed = await (await fetch(base)).json();
+    assert.equal(listed.list.row_count, 1);
+    assert.equal(listed.groups[0].status, 'penetrated');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    old.close();
+  }
+});
+
 test('strategic customer list sorts groups into penetrated, lost and untouched', async () => {
   const insert = db.prepare(`INSERT INTO leased_line
     (group_code, group_name, group_product_code, product_name, product_status_name, ledger_status, manager_name, start_time, status_time, package_fee, updated_at)

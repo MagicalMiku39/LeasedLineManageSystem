@@ -1002,6 +1002,14 @@ if (existsSync(distDir)) {
   });
 }
 
+// An error no route expected still answers in JSON, so the page can say what went wrong
+// instead of a bare status code; the full trace goes to the service log.
+app.use((error, req, res, next) => {
+  if (res.headersSent) return next(error);
+  console.error(`${req.method} ${req.originalUrl} failed:`, error);
+  res.status(500).json({ error: `服务器处理出错：${error.message}` });
+});
+
 export function startServer() {
 backups.startWeekly();
 if (httpsEnabled) {

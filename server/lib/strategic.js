@@ -120,6 +120,18 @@ export function createStrategicRouter({ db, leasedLineSource, currentUser, norma
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: maxUploadMb * 1024 * 1024, files: 1, fields: 0 } });
   const previews = new Map();
 
+  // The v2.1.4beta branch used the name strategic_import for a table of its own (text ids, no
+  // row_count), which CREATE IF NOT EXISTS would keep and every read here would fail on. It is
+  // kept, data and all, under another name; nothing reads it. Its strategic_group table follows
+  // the rename through its foreign key.
+  const importColumns = db.prepare("SELECT name FROM pragma_table_info('strategic_import')").all().map((row) => row.name);
+  if (importColumns.length && !importColumns.includes('row_count')) {
+    const taken = (name) => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
+    let legacy = 'strategic_import_v214beta';
+    for (let index = 2; taken(legacy); index += 1) legacy = `strategic_import_v214beta_${index}`;
+    db.exec(`ALTER TABLE strategic_import RENAME TO ${legacy}`);
+  }
+
   db.exec(`
   CREATE TABLE IF NOT EXISTS strategic_customer (
     group_code TEXT PRIMARY KEY,
