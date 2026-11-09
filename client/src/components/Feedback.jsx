@@ -10,6 +10,7 @@ export function NoticeBar({ notice, onClose }) {
     <div className={`notice-bar${isError ? ' notice-error' : ''}`} role={isError ? 'alert' : 'status'}>
       <Icon size={16} aria-hidden="true" />
       <span>{notice.text}</span>
+      {notice.action && <button type="button" className="text-button notice-action" onClick={notice.action.run}>{notice.action.label}</button>}
       <button type="button" className="notice-close" aria-label="关闭提示" title="关闭提示" onClick={onClose}>
         <X size={14} />
       </button>

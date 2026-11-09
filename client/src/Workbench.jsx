@@ -103,8 +103,8 @@ function StrategicChanges({ strategic, onNavigate }) {
 }
 
 /**
- * 工作台: what the latest ledger import changed and what is left to act on. Each part links to
- * the page where it is handled; nothing here is a figure of its own.
+ * 运营中心 → 导入概览: what the latest ledger import changed and what is left to act on. Each
+ * part links to the page where it is handled; nothing here is a figure of its own.
  */
 export default function Workbench({ ref, kpiMode, refreshToken, onNavigate }) {
   const [revision, setRevision] = useState(0);
@@ -128,7 +128,7 @@ export default function Workbench({ ref, kpiMode, refreshToken, onNavigate }) {
   const lostCount = data?.strategic.changes.filter((row) => row.to === 'lost').length ?? 0;
 
   return (
-    <main className="revenue-page workbench-page">
+    <div className="revenue-page workbench-page">
       <div className="rev-context">
         <span>{latest ? `最近导入：${latest.fileName || '未命名'} · ${dataFreshness(latest.importedAt)}` : data ? '还没有导入过台账' : '正在读取…'}</span>
         <span>台账范围：{kpiMode ? 'KPI 十类产品' : '全部产品'}</span>
@@ -195,6 +195,6 @@ export default function Workbench({ ref, kpiMode, refreshToken, onNavigate }) {
           </section>
         </>
       )}
-    </main>
+    </div>
   );
 }

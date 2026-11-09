@@ -18,7 +18,6 @@ import { useLedger, useLedgerOptions, useLedgerStats } from './ledger/useLedgerD
 import ManagerDashboard, { useManagerPerformance } from './ManagerDashboard.jsx';
 import Operations from './Operations.jsx';
 import Settings from './Settings.jsx';
-import Workbench from './Workbench.jsx';
 import { changeSummaryText } from './ledgerChanges.js';
 import { beijingMonth } from './utils.js';
 
@@ -29,8 +28,7 @@ const ledgerSections = [
 ];
 
 const refreshTitles = {
-  workbench: '重新读取工作台',
-  ledger: '重新读取台账、统计和筛选项',
+  ledger:'重新读取台账、统计和筛选项',
   managers: '重新统计客户经理净增',
   revenue: '重新读取收入数据',
   operations: '重新读取运营中心当前页面',
@@ -41,7 +39,7 @@ const refreshTitles = {
 function App() {
   const [auth, setAuth] = useState({ loading: true, configured: true, user: null, error: '' });
   const signedIn = Boolean(auth.user);
-  const [activeView, setActiveView] = useState('workbench');
+  const [activeView, setActiveView] = useState('ledger');
   const [kpiMode, setKpiMode] = useState(true);
   const [month, setMonth] = useState(() => beijingMonth());
   const [notice, setNotice] = useState(null);
@@ -70,8 +68,7 @@ function App() {
   const revenueActions = useRef(null);
   const operationsActions = useRef(null);
   const [operationsSection, setOperationsSection] = useState('warnings');
-  const [workbenchRevision, setWorkbenchRevision] = useState(0);
-  // Where the 工作台's links point: a strategic group or an import batch, opened once each.
+  // Where the 导入概览's links point: a strategic group or an import batch, opened once each.
   const [strategicFocus, setStrategicFocus] = useState(null);
   const [importsFocus, setImportsFocus] = useState(null);
   const [revenueRevision, setRevenueRevision] = useState(0);
@@ -108,7 +105,7 @@ function App() {
   function selectView(view) {
     // Every visit to the manager page starts from the default 18 managers.
     if (view === 'managers' && activeView !== 'managers') setManagerSelection([...defaultManagers]);
-    // A menu click is a fresh visit: no group or import left open by a 工作台 link.
+    // A menu click is a fresh visit: no group or import left open by a 导入概览 link.
     setStrategicFocus(null);
     setImportsFocus(null);
     setActiveView(view);
@@ -147,11 +144,11 @@ function App() {
       const changes = changeSummaryText(data.changes);
       setNotice({
         tone: data.failedRows > 0 || data.backupError ? 'error' : 'success',
-        text: `${file.name} 导入完成：新增 ${data.successRows} 条，更新 ${data.updatedRows} 条，失败 ${data.failedRows} 条${data.failedRows > 0 ? '，失败原因见“导入记录”' : ''}${changes ? `。${changes}，明细见“导入记录”` : ''}${data.forecastSuggestions > 0 ? `。有 ${data.forecastSuggestions} 条专线可能对应预计任务，请到“KPI达成”确认` : ''}${data.backupError ? `。注意：导入前的自动备份没有成功（${data.backupError}），请到“设置”查看` : ''}`
+        text: `${file.name} 导入完成：新增 ${data.successRows} 条，更新 ${data.updatedRows} 条，失败 ${data.failedRows} 条${data.failedRows > 0 ? '，失败原因见“导入记录”' : ''}${changes ? `。${changes}，明细见“导入记录”` : ''}${data.forecastSuggestions > 0 ? `。有 ${data.forecastSuggestions} 条专线可能对应预计任务，请到“KPI达成”确认` : ''}${data.backupError ? `。注意：导入前的自动备份没有成功（${data.backupError}），请到“设置”查看` : ''}`,
+        action: { label: '查看导入概览', run: () => navigate({ view: 'operations', section: 'overview' }) }
       });
       setOperationsRevision((value) => value + 1);
       setImportsRevision((value) => value + 1);
-      setWorkbenchRevision((value) => value + 1);
       reloadLedgerPage();
       reloadOptions();
     } catch (error) {
@@ -208,9 +205,13 @@ function App() {
     operations: { title: '导出运营中心当前页面', run: () => operationsActions.current?.exportData() },
     revenue: { title: '导出当前收入视图', run: () => revenueActions.current?.exportData(), disabled: !revenueExportReady }
   };
-  const exportAction = exportActions[activeView] || { title: '导出台账', run: exportLedger, menu: ledgerExportMenu };
+  const ledgerExport = { title: '导出台账', run: exportLedger, menu: ledgerExportMenu };
+  // 导入概览 has no list of its own, so 导出 there offers the ledger, as on the 台账 page.
+  const exportAction = activeView === 'operations' && operationsSection === 'overview'
+    ? ledgerExport
+    : exportActions[activeView] || ledgerExport;
 
-  // Links from the 工作台 to the page where each item is handled.
+  // Links from the 导入概览 (and the import notice) to the page where each item is handled.
   function navigate({ view, section, groupCode, batchId }) {
     if (view === 'operations') {
       setOperationsSection(section);
@@ -222,10 +223,6 @@ function App() {
   }
 
   function refreshCurrentView() {
-    if (activeView === 'workbench') {
-      setWorkbenchRevision((value) => value + 1);
-      return;
-    }
     if (activeView === 'operations') {
       operationsActions.current?.refresh();
       return;
@@ -259,8 +256,6 @@ function App() {
   function renderView() {
     const ledgerTabs = <SubTabs label="台账" items={ledgerSections} active={activeView} onChange={selectView} />;
     switch (activeView) {
-      case 'workbench':
-        return <Workbench kpiMode={kpiMode} refreshToken={workbenchRevision} onNavigate={navigate} />;
       case 'operations':
         return (
           <Operations
@@ -271,6 +266,7 @@ function App() {
             section={operationsSection}
             onSectionChange={changeOperationsSection}
             strategicFocus={strategicFocus}
+            onNavigate={navigate}
           />
         );
       case 'revenue':
@@ -297,7 +293,6 @@ function App() {
               setOperationsRevision((value) => value + 1);
               setImportsRevision((value) => value + 1);
               setRevenueRevision((value) => value + 1);
-              setWorkbenchRevision((value) => value + 1);
             }}
           />
         );
@@ -366,7 +361,7 @@ function App() {
         onSaved={(record) => {
           setSelected(record);
           setRevenueRevision((value) => value + 1);
-          setWorkbenchRevision((value) => value + 1);
+          setOperationsRevision((value) => value + 1);
           reloadLedgerPage();
         }}
       />

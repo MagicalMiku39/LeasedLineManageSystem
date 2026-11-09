@@ -423,6 +423,7 @@ td,
 }
 
 .sub-tabs button {
+  flex: none;
   height: 32px;
   border: 0;
   background: transparent;
@@ -608,6 +609,27 @@ main {
   border-bottom-color: rgba(217, 45, 32, .22);
   background: var(--red-soft);
   color: #b42318;
+}
+
+.notice-action {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* On a phone the link goes under the text, which keeps the full width. */
+@media (max-width: 640px) {
+  .notice-bar {
+    flex-wrap: wrap;
+  }
+
+  .notice-bar > span {
+    flex: 1 1 calc(100% - 64px);
+  }
+
+  .notice-action {
+    order: 3;
+    margin-left: 16px;
+  }
 }
 
 .notice-close {
