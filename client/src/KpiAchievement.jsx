@@ -3,19 +3,27 @@ import { Check, ListChecks, Pencil, Plus, Trash2, Undo2, UsersRound } from 'luci
 import { isAbort, jsonBody, requestJson } from './api.js';
 import { InlineError } from './components/Feedback.jsx';
 import KpiProgress from './KpiProgress.jsx';
-import { forecastState, kpiManagerRows } from './kpiRows.js';
+import { confidenceName, confidenceOrder, forecastState, gapSteps, kpiManagerRows } from './kpiRows.js';
 import { dataFreshness } from './ledgerChanges.js';
 import { defaultManagers } from './ledger/config.js';
-import { beijingTime, netClass, signedNumber } from './utils.js';
+import { KpiTrendChart, PaceCompare, PolarityBar, SegmentBar, SegmentLegend } from './charts.jsx';
+import { beijingMonth, beijingTime, netClass, signedNumber } from './utils.js';
 
-const emptyForm = { kind: 'added', group_code: '', group_name: '', manager_name: '', product_type: '', line_count: '', month: '' };
+const emptyForm = { kind: 'added', group_code: '', group_name: '', manager_name: '', product_type: '', line_count: '', month: '', confidence: '' };
 const kindLabels = { added: '新增', cancelled: '销户' };
+// A month choice is kept as "year-month"; next year's months are its reserve.
+const monthKey = (item) => `${item.year}-${item.month}`;
+const monthLabel = (item, year) => (item.year === year ? `${item.month}月` : `${item.year}年${item.month}月（明年储备）`);
 // What "done" means for each kind of forecast once the real change is in the ledger.
 const landedLabels = { added: '已落地', cancelled: '已销户' };
 
 function percent(value, target) {
   if (!target) return '—';
   return `${((value / target) * 100).toFixed(1)}%`;
+}
+
+function gapText(gap) {
+  return gap > 0 ? `还差 ${gap}` : gap < 0 ? `超出 ${-gap}` : '正好达成';
 }
 
 function Metric({ label, value, className, note }) {
@@ -117,11 +125,13 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken }) {
           客户经理: row.manager_name, 新增: row.added, 销户: row.cancelled, 净增: row.net,
           预计新增: row.forecastAdded, 预计销户: row.forecastCancelled, 预计净增: row.expectedNet
         }))), '客户经理净增');
-        XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(forecasts.map((row) => ({
-          预计类别: kindLabels[row.kind], 月份: `${row.month}月`, 集团编码: row.group_code, 集团名称: row.group_name, 客户经理: row.manager_name,
-          产品类型: row.product_type, 条数: row.line_count, 已落地条数: row.landed_count, 状态: forecastState(row),
+        XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet([...forecasts, ...(data.reserve || [])].map((row) => ({
+          预计类别: kindLabels[row.kind], 月份: `${row.year}年${row.month}月`, 把握度: confidenceName(row.kind, row.confidence),
+          集团编码: row.group_code, 集团名称: row.group_name, 客户经理: row.manager_name,
+          产品类型: row.product_type, 条数: row.line_count, 已落地条数: row.landed_count,
+          状态: row.year > data.year ? '明年储备' : row.overdue ? `逾期 · ${forecastState(row)}` : forecastState(row),
           最新进展: row.latest_note || '', 进展更新时间: row.latest_at ? beijingTime(row.latest_at) : ''
-        })), { header: ['预计类别', '月份', '集团编码', '集团名称', '客户经理', '产品类型', '条数', '已落地条数', '状态', '最新进展', '进展更新时间'] }), '预计新增与销户');
+        })), { header: ['预计类别', '月份', '把握度', '集团编码', '集团名称', '客户经理', '产品类型', '条数', '已落地条数', '状态', '最新进展', '进展更新时间'] }), '预计新增与销户');
         XLSX.writeFile(book, `KPI达成-${data.year}.xlsx`);
       } catch (err) { setError(`导出失败：${err.message}`); }
     }
@@ -144,7 +154,9 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken }) {
         manager_name: matched ? matched.manager_name : form.manager_name,
         product_type: form.product_type,
         line_count: Number(form.line_count),
-        month: Number(form.month)
+        year: Number(form.month.split('-')[0]),
+        month: Number(form.month.split('-')[1]),
+        confidence: form.confidence
       }));
       setForm((current) => ({ ...emptyForm, kind: current.kind, product_type: current.product_type, month: current.month }));
       reload();
@@ -190,11 +202,132 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken }) {
   const forecast = data?.forecast;
   const show = (value) => (loading || !data ? '—' : value);
   const gap = forecast ? target - forecast.expectedNet : 0;
-  const actualShare = actual ? Math.max(0, Math.min(1, actual.net / target)) : 0;
-  // Forecast cancellations that outweigh forecast additions only lower the total; the bar then shows no forecast part.
-  const forecastShare = actual && forecast ? Math.max(0, Math.min(1 - actualShare, forecast.net / target)) : 0;
-  const monthNote = (field) => data.months.map((month) => `${month}月 ${forecast.byMonth[month]?.[field] || 0}`).join(' · ');
+  const monthNote = (field) => {
+    const parts = Object.entries(forecast.byMonth).filter(([, value]) => value[field] > 0).map(([month, value]) => `${month}月 ${value[field]}`);
+    return parts.length ? parts.join(' · ') : '暂无';
+  };
   const kindLabel = kindLabels[form.kind];
+  const currentMonth = data?.currentMonth ?? Number(beijingMonth().slice(5, 7));
+  const reserve = data?.reserve || [];
+  const overdue = forecast?.overdue;
+  // The gap closed step by step, surest forecasts first; and the same as one bar the target long.
+  const steps = data ? gapSteps(actual.net, target, forecast.byConfidence) : [];
+  const finalGap = steps.length ? steps[steps.length - 1].gap : 0;
+  const bridge = data ? [
+    { key: 'done', label: '已完成', value: Math.max(actual.net, 0), tone: 'tier-done' },
+    ...steps.map((step) => ({ key: step.level, label: confidenceName('added', step.level), value: Math.max(step.net, 0), tone: `tier-${step.level}` })),
+    { key: 'gap', label: '仍缺', value: Math.max(finalGap, 0), tone: 'tier-gap' }
+  ] : [];
+  const monthRows = useMemo(() => {
+    let running = 0;
+    return (data?.monthly || []).map((row) => {
+      running += row.added - row.cancelled;
+      return { ...row, net: row.added - row.cancelled, cumulative: running };
+    });
+  }, [data]);
+  // One scale for every manager's bar, so lengths compare across rows.
+  const polarityMax = Math.max(0, ...managerRows.map((row) => Math.max(row.added, row.cancelled)));
+
+  // This year's forecasts and next year's reserve share one table layout.
+  const forecastHead = (
+    <thead>
+      <tr>
+        <th>类别</th>
+        <th>月份</th>
+        <th>把握度</th>
+        <th>集团编码</th>
+        <th>集团名称</th>
+        <th>客户经理</th>
+        <th>类型</th>
+        <th className="num">条数</th>
+        <th className="num">已落地</th>
+        <th>最新进展</th>
+        <th>更新时间</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+  );
+
+  const forecastRow = (row) => (
+    <tr
+      key={row.id}
+      className={`kpi-forecast-row${row.landed ? ' kpi-landed' : ''}${row.overdue ? ' kpi-overdue' : ''}`}
+      tabIndex={0}
+      title="查看和更新进展"
+      onClick={() => setProgressId(row.id)}
+      onKeyDown={(event) => {
+        if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault();
+          setProgressId(row.id);
+        }
+      }}
+    >
+      <td className={row.landed ? undefined : row.kind === 'cancelled' ? 'kpi-cancelled' : 'kpi-added'}>{kindLabels[row.kind]}</td>
+      <td onClick={(event) => event.stopPropagation()}>
+        <span className="kpi-month">
+          {row.year === data.year ? `${row.month}月` : `${row.year}年${row.month}月`}
+          {row.overdue && <span className="status-pill kpi-overdue-pill">逾期</span>}
+        </span>
+        {row.overdue && (
+          <select
+            className="kpi-inline-select"
+            aria-label="改到新的月份"
+            value=""
+            disabled={busyId !== null}
+            onChange={(event) => {
+              const [year, month] = event.target.value.split('-').map(Number);
+              changeForecast(row, jsonBody('PATCH', { year, month }));
+            }}
+          >
+            <option value="">改到…</option>
+            {data.months.map((item) => <option key={monthKey(item)} value={monthKey(item)}>{monthLabel(item, data.year)}</option>)}
+          </select>
+        )}
+      </td>
+      <td onClick={(event) => event.stopPropagation()}>
+        <select
+          className={`kpi-inline-select${(row.confidence || 'unrated') === 'unrated' ? ' kpi-unrated' : ''}`}
+          aria-label="把握度"
+          value={row.confidence || 'unrated'}
+          disabled={busyId !== null || row.landed}
+          onChange={(event) => changeForecast(row, jsonBody('PATCH', { confidence: event.target.value }))}
+        >
+          {confidenceOrder.map((level) => <option key={level} value={level}>{confidenceName(row.kind, level)}</option>)}
+        </select>
+      </td>
+      <td>{row.group_code}</td>
+      <td>{row.group_name}{row.suggestions > 0 && <span className="status-pill kpi-suggestion-pill">可能已{row.kind === 'cancelled' ? '销户' : '落地'} {row.suggestions}</span>}</td>
+      <td>{row.manager_name}</td>
+      <td>{row.product_type}</td>
+      <td className="num">{row.line_count}</td>
+      <td className="num">{row.landed_count}</td>
+      <td className="kpi-latest-note" title={row.latest_note || undefined}>{row.latest_note || '—'}</td>
+      <td>{row.latest_at ? beijingTime(row.latest_at) : '—'}</td>
+      <td onClick={(event) => event.stopPropagation()}>
+        <div className="kpi-row-actions">
+          <button
+            type="button"
+            disabled={busyId !== null}
+            title={row.landed
+              ? '恢复为预计，重新计入预计达成'
+              : row.kind === 'cancelled' ? '专线已实际销户，不再计入预计销户' : '专线已实际开通，不再计入预计新增'}
+            onClick={() => changeForecast(row, jsonBody('PATCH', { landed: !row.landed }))}
+          >
+            {row.landed ? <><Undo2 size={14} /> 恢复预计</> : <><Check size={14} /> {landedLabels[row.kind]}</>}
+          </button>
+          {confirmDelete === row.id ? (
+            <button type="button" className="kpi-danger" disabled={busyId !== null} onClick={() => changeForecast(row, { method: 'DELETE' })}>
+              确认删除
+            </button>
+          ) : (
+            <button type="button" disabled={busyId !== null} aria-label="删除" title="删除" onClick={() => setConfirmDelete(row.id)}>
+              <Trash2 size={14} />
+            </button>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
 
   return (
     <>
@@ -241,63 +374,12 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken }) {
             <Metric label="年度净增" value={show(signedNumber(actual?.net))} className={actual ? netClass(actual.net) : undefined} note={actual ? `完成 ${percent(actual.net, target)}` : undefined} />
           </div>
 
-          <div className="kpi-table-head">
-            <h4>客户经理净增</h4>
-            <div className="scope-actions" role="group" aria-label="客户经理范围">
-              <button type="button" aria-pressed={scope === 'all'} onClick={() => setScope('all')}>
-                <UsersRound size={15} /> 查看全部客户经理
-              </button>
-              <button type="button" aria-pressed={scope === 'defaults'} onClick={() => setScope('defaults')}>
-                <ListChecks size={15} /> 指定18位客户经理
-              </button>
+          {data?.pace && !loading && (
+            <div className="kpi-pace">
+              <h4>时间进度对比</h4>
+              <PaceCompare pace={data.pace} value={actual.net} target={target} />
             </div>
-          </div>
-          <div className="table-scroll kpi-table-scroll">
-            <table className="data-table kpi-table">
-              <thead>
-                <tr>
-                  <th>客户经理</th>
-                  <th className="num">新增</th>
-                  <th className="num">销户</th>
-                  <th className="num">净增</th>
-                  <th className="num">预计新增</th>
-                  <th className="num">预计销户</th>
-                  <th className="num">预计净增</th>
-                </tr>
-              </thead>
-              <tbody>
-                {!loading && data && managerRows.map((row) => (
-                  <tr key={row.manager_name}>
-                    <td>{row.manager_name}</td>
-                    <td className="num kpi-added">{row.added}</td>
-                    <td className="num kpi-cancelled">{row.cancelled}</td>
-                    <td className={`num ${netClass(row.net)}`}><strong>{signedNumber(row.net)}</strong></td>
-                    <td className="num">{row.forecastAdded}</td>
-                    <td className="num">{row.forecastCancelled}</td>
-                    <td className={`num ${netClass(row.expectedNet)}`}>{signedNumber(row.expectedNet)}</td>
-                  </tr>
-                ))}
-                {(loading || !data || managerRows.length === 0) && (
-                  <tr className="state-row">
-                    <td colSpan="7" className="empty">{loading ? '正在统计…' : error ? '加载失败，请重试' : '本年度暂无新增或销户'}</td>
-                  </tr>
-                )}
-              </tbody>
-              {!loading && data && managerRows.length > 0 && (
-                <tfoot>
-                  <tr>
-                    <td>{scope === 'defaults' ? '18 人合计' : '合计'}</td>
-                    <td className="num">{scopeTotal.added}</td>
-                    <td className="num">{scopeTotal.cancelled}</td>
-                    <td className={`num ${netClass(scopeTotal.net)}`}>{signedNumber(scopeTotal.net)}</td>
-                    <td className="num">{scopeTotal.forecastAdded}</td>
-                    <td className="num">{scopeTotal.forecastCancelled}</td>
-                    <td className={`num ${netClass(scopeTotal.expectedNet)}`}>{signedNumber(scopeTotal.expectedNet)}</td>
-                  </tr>
-                </tfoot>
-              )}
-            </table>
-          </div>
+          )}
         </section>
 
         <section className="kpi-panel" aria-label="预计达成">
@@ -314,165 +396,249 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken }) {
             />
           </div>
           {data && !loading && (
-            <div className="kpi-progress" role="img" aria-label={`当前净增 ${actual.net} 条，预计新增 ${forecast.added} 条、预计销户 ${forecast.cancelled} 条，目标 ${target} 条`}>
-              <span className="kpi-progress-actual" style={{ width: `${actualShare * 100}%` }} />
-              <span className="kpi-progress-forecast" style={{ width: `${forecastShare * 100}%` }} />
+            <div className="kpi-bridge">
+              <div className="kpi-bridge-head">
+                <h4>缺口测算</h4>
+                <span>整条为目标 {target}；预计按把握度从高到低累加，每档为预计新增减预计销户</span>
+              </div>
+              <SegmentBar label="缺口测算" segments={bridge} printValues />
+              <SegmentLegend segments={bridge} />
+              <div className="table-scroll kpi-steps">
+                <table className="data-table kpi-table">
+                  <thead>
+                    <tr><th>累加到</th><th className="num kpi-step-detail">预计新增</th><th className="num kpi-step-detail">预计销户</th><th className="num">预计年度净增</th><th className="num">距目标</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>只算已完成</td><td className="num kpi-step-detail">—</td><td className="num kpi-step-detail">—</td>
+                      <td className="num">{actual.net}</td>
+                      <td className={`num ${target - actual.net > 0 ? 'net-negative' : 'net-positive'}`}>{gapText(target - actual.net)}</td>
+                    </tr>
+                    {steps.map((step) => (
+                      <tr key={step.level}>
+                        <td>+ {confidenceName('added', step.level)}{step.level !== 'unrated' && <small className="kpi-step-alt"> / {confidenceName('cancelled', step.level)}</small>}</td>
+                        <td className="num kpi-added kpi-step-detail">{step.added}</td>
+                        <td className="num kpi-cancelled kpi-step-detail">{step.cancelled}</td>
+                        <td className="num">{step.expected}</td>
+                        <td className={`num ${step.gap > 0 ? 'net-negative' : 'net-positive'}`}>{gapText(step.gap)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
-          {data && !loading && (
-            <p className="kpi-legend"><span className="kpi-dot kpi-dot-actual" />当前净增<span className="kpi-dot kpi-dot-forecast" />预计净增（新增 − 销户）<span className="kpi-legend-target">目标 {target}</span></p>
-          )}
-
-          <form className="kpi-form" onSubmit={addForecast}>
-            <h4>填写预计新增或销户</h4>
-            <div className="scope-actions kpi-kind" role="group" aria-label="预计类别">
-              {Object.entries(kindLabels).map(([kind, label]) => (
-                <button key={kind} type="button" aria-pressed={form.kind === kind} onClick={() => updateForm('kind', kind)}>预计{label}</button>
-              ))}
-            </div>
-            <label>
-              集团编码
-              <input
-                list="kpi-group-options"
-                value={form.group_code}
-                placeholder="输入编码或名称查找"
-                autoComplete="off"
-                onChange={(event) => updateForm('group_code', event.target.value)}
-                required
-              />
-              <datalist id="kpi-group-options">
-                {matches.groups.map((group) => (
-                  <option key={group.group_code} value={group.group_code}>{`${group.group_name} · ${group.manager_name || '未填写'}`}</option>
-                ))}
-              </datalist>
-            </label>
-            <label>
-              集团名称
-              <input
-                value={matched ? matched.group_name : form.group_name}
-                readOnly={!unknownGroup}
-                placeholder={unknownGroup ? '新集团，请填写名称' : '选中集团编码后自动带出'}
-                onChange={(event) => updateForm('group_name', event.target.value)}
-                required={unknownGroup}
-              />
-            </label>
-            <label>
-              客户经理
-              {unknownGroup ? (
-                <select value={form.manager_name} onChange={(event) => updateForm('manager_name', event.target.value)} required>
-                  <option value="">选择客户经理</option>
-                  {managerChoices.map((name) => <option key={name} value={name}>{name}</option>)}
-                </select>
-              ) : (
-                <input value={matched ? matched.manager_name || '未填写' : ''} readOnly placeholder="选中集团编码后自动带出" />
-              )}
-            </label>
-            <label>
-              预计{kindLabel}类型
-              <select value={form.product_type} onChange={(event) => updateForm('product_type', event.target.value)} required>
-                <option value="">选择产品类型</option>
-                {(data?.productTypes || []).map((type) => <option key={type} value={type}>{type}</option>)}
-              </select>
-            </label>
-            <label>
-              预计{kindLabel}条数
-              <input type="number" min="1" step="1" inputMode="numeric" value={form.line_count} onChange={(event) => updateForm('line_count', event.target.value)} required />
-            </label>
-            <label>
-              预计{kindLabel}月份
-              <select value={form.month} onChange={(event) => updateForm('month', event.target.value)} required>
-                <option value="">选择月份</option>
-                {(data?.months || [11, 12]).map((month) => <option key={month} value={month}>{month}月</option>)}
-              </select>
-            </label>
-            {unknownGroup && <p className="kpi-form-hint">台账中没有该集团编码，按新集团登记，请手动填写名称并选择客户经理。</p>}
-            {formError && <p role="alert" className="operations-error kpi-form-hint">{formError}</p>}
-            <div className="kpi-form-actions">
-              <button type="submit" className="primary" disabled={saving || !data || (Boolean(code) && !matched && !unknownGroup)}>
-                <Plus size={16} /> {saving ? '保存中…' : `添加预计${kindLabel}`}
-              </button>
-            </div>
-          </form>
-
-          <div className="table-scroll kpi-table-scroll">
-            <table className="data-table kpi-table">
-              <thead>
-                <tr>
-                  <th>类别</th>
-                  <th>月份</th>
-                  <th>集团编码</th>
-                  <th>集团名称</th>
-                  <th>客户经理</th>
-                  <th>类型</th>
-                  <th className="num">条数</th>
-                  <th className="num">已落地</th>
-                  <th>最新进展</th>
-                  <th>更新时间</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {!loading && forecasts.map((row) => (
-                  <tr
-                    key={row.id}
-                    className={`kpi-forecast-row${row.landed ? ' kpi-landed' : ''}`}
-                    tabIndex={0}
-                    title="查看和更新进展"
-                    onClick={() => setProgressId(row.id)}
-                    onKeyDown={(event) => {
-                      if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
-                        event.preventDefault();
-                        setProgressId(row.id);
-                      }
-                    }}
-                  >
-                    <td className={row.landed ? undefined : row.kind === 'cancelled' ? 'kpi-cancelled' : 'kpi-added'}>{kindLabels[row.kind]}</td>
-                    <td>{row.month}月</td>
-                    <td>{row.group_code}</td>
-                    <td>{row.group_name}{row.suggestions > 0 && <span className="status-pill kpi-suggestion-pill">可能已{row.kind === 'cancelled' ? '销户' : '落地'} {row.suggestions}</span>}</td>
-                    <td>{row.manager_name}</td>
-                    <td>{row.product_type}</td>
-                    <td className="num">{row.line_count}</td>
-                    <td className="num">{row.landed_count}</td>
-                    <td className="kpi-latest-note" title={row.latest_note || undefined}>{row.latest_note || '—'}</td>
-                    <td>{row.latest_at ? beijingTime(row.latest_at) : '—'}</td>
-                    <td onClick={(event) => event.stopPropagation()}>
-                      <div className="kpi-row-actions">
-                        <button
-                          type="button"
-                          disabled={busyId !== null}
-                          title={row.landed
-                            ? '恢复为预计，重新计入预计达成'
-                            : row.kind === 'cancelled' ? '专线已实际销户，不再计入预计销户' : '专线已实际开通，不再计入预计新增'}
-                          onClick={() => changeForecast(row, jsonBody('PATCH', { landed: !row.landed }))}
-                        >
-                          {row.landed ? <><Undo2 size={14} /> 恢复预计</> : <><Check size={14} /> {landedLabels[row.kind]}</>}
-                        </button>
-                        {confirmDelete === row.id ? (
-                          <button type="button" className="kpi-danger" disabled={busyId !== null} onClick={() => changeForecast(row, { method: 'DELETE' })}>
-                            确认删除
-                          </button>
-                        ) : (
-                          <button type="button" disabled={busyId !== null} aria-label="删除" title="删除" onClick={() => setConfirmDelete(row.id)}>
-                            <Trash2 size={14} />
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-                {(loading || forecasts.length === 0) && (
-                  <tr className="state-row">
-                    <td colSpan="11" className="empty">{loading ? '正在加载…' : '暂无预计新增或销户，可在上方填写'}</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-          {suggestionTotal > 0 && <p className="kpi-suggestion-note" role="status">导入后发现可能对应预计任务的专线，点击带标记的任务确认。确认前不会改动任何数字。</p>}
-          <p className="operations-rule">预计年度净增 = 当前净增 + 预计新增 − 预计销户，只计尚未落地的条数。点击一行可以查看和更新进展；专线实际开通或销户、已体现在台账中后，请填写已落地条数，或点“已落地”“已销户”表示全部完成，避免重复计算。</p>
         </section>
       </div>
+
+      {data?.monthly && !loading && (
+        <section className="kpi-panel kpi-wide" aria-label="年度走势">
+          <div className="kpi-trend">
+            <h3>年度走势</h3>
+            <KpiTrendChart monthly={data.monthly} currentMonth={currentMonth} target={target} forecastByMonth={forecast.byMonth} />
+            <p className="chart-note">按专线现在的开始时间、状态时间归到各月，与上面的年度净增同一口径；系统不保存每月当时的快照。</p>
+            <details className="chart-table">
+              <summary>查看每月数字</summary>
+              <div className="table-scroll">
+                <table className="data-table kpi-table">
+                  <thead>
+                    <tr><th>月份</th><th className="num">新增</th><th className="num">销户</th><th className="num">当月净增</th><th className="num">累计净增</th><th className="num">目标进度</th></tr>
+                  </thead>
+                  <tbody>
+                    {monthRows.map((row) => (
+                      <tr key={row.month}>
+                        <td>{row.month} 月</td>
+                        <td className="num kpi-added">{row.added}</td>
+                        <td className="num kpi-cancelled">{row.cancelled}</td>
+                        <td className={`num ${netClass(row.net)}`}>{signedNumber(row.net)}</td>
+                        <td className="num">{row.month <= currentMonth ? row.cumulative : '—'}</td>
+                        <td className="num">{Math.round((target * row.month) / 12)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          </div>
+        </section>
+      )}
+
+      <section className="kpi-panel kpi-wide" aria-label="客户经理净增">
+        <div className="kpi-table-head">
+          <h3>客户经理净增</h3>
+          <div className="scope-actions" role="group" aria-label="客户经理范围">
+            <button type="button" aria-pressed={scope === 'all'} onClick={() => setScope('all')}>
+              <UsersRound size={15} /> 查看全部客户经理
+            </button>
+            <button type="button" aria-pressed={scope === 'defaults'} onClick={() => setScope('defaults')}>
+              <ListChecks size={15} /> 指定18位客户经理
+            </button>
+          </div>
+        </div>
+        <div className="table-scroll kpi-table-scroll">
+          <table className="data-table kpi-table">
+            <thead>
+              <tr>
+                <th>客户经理</th>
+                <th className="num">新增</th>
+                <th className="num">销户</th>
+                <th className="num">净增</th>
+                <th className="kpi-polarity-head"><span className="kpi-polarity-key"><i className="kpi-key-cancelled" />销户 · 新增<i className="kpi-key-added" /></span></th>
+                <th className="num">预计新增</th>
+                <th className="num">预计销户</th>
+                <th className="num">预计净增</th>
+              </tr>
+            </thead>
+            <tbody>
+              {!loading && data && managerRows.map((row) => (
+                <tr key={row.manager_name}>
+                  <td>{row.manager_name}</td>
+                  <td className="num kpi-added">{row.added}</td>
+                  <td className="num kpi-cancelled">{row.cancelled}</td>
+                  <td className={`num ${netClass(row.net)}`}><strong>{signedNumber(row.net)}</strong></td>
+                  <td className="kpi-polarity-cell"><PolarityBar added={row.added} cancelled={row.cancelled} max={polarityMax} /></td>
+                  <td className="num">{row.forecastAdded}</td>
+                  <td className="num">{row.forecastCancelled}</td>
+                  <td className={`num ${netClass(row.expectedNet)}`}>{signedNumber(row.expectedNet)}</td>
+                </tr>
+              ))}
+              {(loading || !data || managerRows.length === 0) && (
+                <tr className="state-row">
+                  <td colSpan="8" className="empty">{loading ? '正在统计…' : error ? '加载失败，请重试' : '本年度暂无新增或销户'}</td>
+                </tr>
+              )}
+            </tbody>
+            {!loading && data && managerRows.length > 0 && (
+              <tfoot>
+                <tr>
+                  <td>{scope === 'defaults' ? '18 人合计' : '合计'}</td>
+                  <td className="num">{scopeTotal.added}</td>
+                  <td className="num">{scopeTotal.cancelled}</td>
+                  <td className={`num ${netClass(scopeTotal.net)}`}>{signedNumber(scopeTotal.net)}</td>
+                  <td />
+                  <td className="num">{scopeTotal.forecastAdded}</td>
+                  <td className="num">{scopeTotal.forecastCancelled}</td>
+                  <td className={`num ${netClass(scopeTotal.expectedNet)}`}>{signedNumber(scopeTotal.expectedNet)}</td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      </section>
+
+      <section className="kpi-panel kpi-wide" aria-label="预计任务">
+        <h3>预计任务</h3>
+        <form className="kpi-form" onSubmit={addForecast}>
+          <h4>填写预计新增或销户</h4>
+          <div className="scope-actions kpi-kind" role="group" aria-label="预计类别">
+            {Object.entries(kindLabels).map(([kind, label]) => (
+              <button key={kind} type="button" aria-pressed={form.kind === kind} onClick={() => updateForm('kind', kind)}>预计{label}</button>
+            ))}
+          </div>
+          <label>
+            集团编码
+            <input
+              list="kpi-group-options"
+              value={form.group_code}
+              placeholder="输入编码或名称查找"
+              autoComplete="off"
+              onChange={(event) => updateForm('group_code', event.target.value)}
+              required
+            />
+            <datalist id="kpi-group-options">
+              {matches.groups.map((group) => (
+                <option key={group.group_code} value={group.group_code}>{`${group.group_name} · ${group.manager_name || '未填写'}`}</option>
+              ))}
+            </datalist>
+          </label>
+          <label>
+            集团名称
+            <input
+              value={matched ? matched.group_name : form.group_name}
+              readOnly={!unknownGroup}
+              placeholder={unknownGroup ? '新集团，请填写名称' : '选中集团编码后自动带出'}
+              onChange={(event) => updateForm('group_name', event.target.value)}
+              required={unknownGroup}
+            />
+          </label>
+          <label>
+            客户经理
+            {unknownGroup ? (
+              <select value={form.manager_name} onChange={(event) => updateForm('manager_name', event.target.value)} required>
+                <option value="">选择客户经理</option>
+                {managerChoices.map((name) => <option key={name} value={name}>{name}</option>)}
+              </select>
+            ) : (
+              <input value={matched ? matched.manager_name || '未填写' : ''} readOnly placeholder="选中集团编码后自动带出" />
+            )}
+          </label>
+          <label>
+            预计{kindLabel}类型
+            <select value={form.product_type} onChange={(event) => updateForm('product_type', event.target.value)} required>
+              <option value="">选择产品类型</option>
+              {(data?.productTypes || []).map((type) => <option key={type} value={type}>{type}</option>)}
+            </select>
+          </label>
+          <label>
+            预计{kindLabel}条数
+            <input type="number" min="1" step="1" inputMode="numeric" value={form.line_count} onChange={(event) => updateForm('line_count', event.target.value)} required />
+          </label>
+          <label>
+            预计{kindLabel}月份
+            <select value={form.month} onChange={(event) => updateForm('month', event.target.value)} required>
+              <option value="">选择月份</option>
+              {(data?.months || []).map((item) => <option key={monthKey(item)} value={monthKey(item)}>{monthLabel(item, data.year)}</option>)}
+            </select>
+          </label>
+          <label>
+            把握度
+            <select value={form.confidence} onChange={(event) => updateForm('confidence', event.target.value)} required>
+              <option value="">选择把握度</option>
+              {confidenceOrder.filter((level) => level !== 'unrated').map((level) => <option key={level} value={level}>{confidenceName(form.kind, level)}</option>)}
+            </select>
+          </label>
+          {unknownGroup && <p className="kpi-form-hint">台账中没有该集团编码，按新集团登记，请手动填写名称并选择客户经理。</p>}
+          {formError && <p role="alert" className="operations-error kpi-form-hint">{formError}</p>}
+          <div className="kpi-form-actions">
+            <button type="submit" className="primary" disabled={saving || !data || (Boolean(code) && !matched && !unknownGroup)}>
+              <Plus size={16} /> {saving ? '保存中…' : `添加预计${kindLabel}`}
+            </button>
+          </div>
+        </form>
+
+        {overdue?.forecasts > 0 && (
+          <p className="kpi-overdue-note" role="status">
+            <span className="status-pill kpi-overdue-pill">逾期 {overdue.forecasts}</span>
+            这些预计的月份已过，还有新增 {overdue.added} 条、销户 {overdue.cancelled} 条没有落地。请更新进展、确认落地，或在“月份”里改到新的月份。
+          </p>
+        )}
+        <div className="table-scroll kpi-table-scroll">
+          <table className="data-table kpi-table">
+            {forecastHead}
+            <tbody>
+              {!loading && forecasts.map(forecastRow)}
+              {(loading || forecasts.length === 0) && (
+                <tr className="state-row">
+                  <td colSpan="12" className="empty">{loading ? '正在加载…' : '暂无预计新增或销户，可在上方填写'}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        {!loading && reserve.length > 0 && (
+          <>
+            <h4 className="kpi-reserve-title">明年储备 <span>{reserve.length} 条 · 不计入 {data.year} 年 KPI</span></h4>
+            <div className="table-scroll kpi-table-scroll">
+              <table className="data-table kpi-table">
+                {forecastHead}
+                <tbody>{reserve.map(forecastRow)}</tbody>
+              </table>
+            </div>
+          </>
+        )}
+        {suggestionTotal > 0 && <p className="kpi-suggestion-note" role="status">导入后发现可能对应预计任务的专线，点击带标记的任务确认。确认前不会改动任何数字。</p>}
+        <p className="operations-rule">预计年度净增 = 当前净增 + 预计新增 − 预计销户，只计尚未落地的条数。点击一行可以查看和更新进展；专线实际开通或销户、已体现在台账中后，请填写已落地条数，或点“已落地”“已销户”表示全部完成，避免重复计算。</p>
+      </section>
       {progressId !== null && <KpiProgress forecastId={progressId} onClose={() => setProgressId(null)} onChanged={reload} />}
     </>
   );

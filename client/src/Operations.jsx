@@ -1,5 +1,6 @@
 import React, { useEffect, useImperativeHandle, useMemo, useState } from 'react';
 import { Bell, BellOff, Mail, Search } from 'lucide-react';
+import { SegmentBar, SegmentLegend } from './charts.jsx';
 import SubTabs from './components/SubTabs.jsx';
 import KpiAchievement from './KpiAchievement.jsx';
 import StrategicCustomers from './StrategicCustomers.jsx';
@@ -10,6 +11,9 @@ import './operations.css';
 
 const labels = { unmarked: '未标注', remind: '提醒', ignore: '忽略' };
 const levels = { green: '绿色 · 0–89 天', yellow: '黄色 · 90–149 天', red: '红色 · 150–179 天', cancel: '待销户 · ≥180 天' };
+// The distribution bar runs from the most urgent level to the least.
+const levelOrder = ['cancel', 'red', 'yellow', 'green'];
+const levelShort = { cancel: '待销户', red: '红色', yellow: '黄色', green: '绿色' };
 const sections = [
   { key: 'warnings', label: '欠费销户预警' },
   { key: 'kpi', label: 'KPI达成' },
@@ -55,10 +59,14 @@ function ArrearsWarnings({ ref, kpiMode, refreshToken, onOpenLine }) {
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [asOf, kpiMode, refreshToken, revision]);
-  const rows = useMemo(() => (data?.rows || []).filter((row) => {
+  // Lines matching the mark and search filters; the level filter narrows these further.
+  const unleveled = useMemo(() => (data?.rows || []).filter((row) => {
     const matches = mark === 'all' || (mark === 'active' ? row.mark !== 'ignore' : row.mark === mark);
-    return matches && (level === 'all' || row.warning_level === level) && [row.group_code, row.group_name, row.group_product_code, row.product_code, row.group_product_account_id, row.manager_name].some((value) => String(value || '').toLowerCase().includes(keyword.trim().toLowerCase()));
-  }), [data, mark, keyword, level]);
+    return matches && [row.group_code, row.group_name, row.group_product_code, row.product_code, row.group_product_account_id, row.manager_name].some((value) => String(value || '').toLowerCase().includes(keyword.trim().toLowerCase()));
+  }), [data, mark, keyword]);
+  const rows = useMemo(() => unleveled.filter((row) => level === 'all' || row.warning_level === level), [unleveled, level]);
+  const levelSegments = levelOrder.map((key) => ({ key, label: levelShort[key], value: unleveled.filter((row) => row.warning_level === key).length, tone: `level-${key}` }));
+  const toggleLevel = (key) => setLevel((current) => (current === key ? 'all' : key));
   useImperativeHandle(ref, () => ({
     refresh: () => setRevision((value) => value + 1),
     exportData: async () => {
@@ -99,6 +107,16 @@ function ArrearsWarnings({ ref, kpiMode, refreshToken, onOpenLine }) {
       <div><span>已设提醒</span><strong className="operations-remind">{loading || !data ? '—' : data.rows.filter((row) => row.mark === 'remind').length}</strong></div>
       <div><span>已忽略</span><strong>{loading || !data ? '—' : data.rows.filter((row) => row.mark === 'ignore').length}</strong></div>
     </section>
+    {!loading && data && (
+      <section className="operations-levels" aria-label="预警等级分布">
+        <div className="operations-levels-head">
+          <span>预警等级分布 · {unleveled.length} 条{mark === 'active' ? '（不含忽略）' : ''}</span>
+          <span className="operations-rule">点击一段只看该等级，再点一次取消</span>
+        </div>
+        <SegmentBar label="预警等级分布" segments={levelSegments} onSelect={toggleLevel} selected={level === 'all' ? undefined : level} />
+        <SegmentLegend segments={levelSegments} onSelect={toggleLevel} selected={level === 'all' ? undefined : level} />
+      </section>
+    )}
     <div className="operations-filters">
       <label className="operations-search"><Search size={17} /><input aria-label="搜索预警" placeholder="集团、产品编码、账户或客户经理" value={keyword} onChange={(event) => setKeyword(event.target.value)} /></label>
       <label>标注状态<select value={mark} onChange={(event) => setMark(event.target.value)}><option value="active">待关注（不含忽略）</option><option value="all">全部</option>{Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>

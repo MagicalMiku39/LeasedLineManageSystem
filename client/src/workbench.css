@@ -1,6 +1,8 @@
 /* Inside 运营中心, which already gives the page its width and padding. */
 .operations-page .workbench-page { max-width: none; padding: 0; }
 
+.workbench-meter { padding: 16px 0 4px; }
+
 .workbench-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 40px; }
 
 .workbench-todos { margin: 0; padding: 0; list-style: none; border-top: 1px solid #e0e0e5; }

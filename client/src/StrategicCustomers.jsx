@@ -3,6 +3,7 @@ import { Building2, ChevronRight, Download, FileSpreadsheet, ListChecks, Refresh
 import { apiBase, isAbort, jsonBody, requestJson } from './api.js';
 import { DataTable, Loader, Metric, Notice } from './GroupRevenue.jsx';
 import { defaultManagers } from './ledger/config.js';
+import { SegmentBar, SegmentLegend } from './charts.jsx';
 import { beijingTime, money } from './utils.js';
 
 export const strategicStatuses = [
@@ -24,6 +25,12 @@ const filterByKey = Object.fromEntries(statusFilters.map((item) => [item.key, it
 const lineKinds = { active: '在网', cancelled: '已销户', other: '未开通或回退' };
 const day = (value) => (value ? String(value).slice(0, 10) : '—');
 const percent = (value) => (value == null ? '—' : `${(value * 100).toFixed(1)}%`);
+// A set of groups as parts of a whole, in the same order as the metrics.
+const composition = (row) => [
+  { key: 'penetrated', label: '已渗透', value: row.penetrated, tone: 'good' },
+  { key: 'lost', label: '已流失', value: row.lost, tone: 'bad' },
+  { key: 'untouched', label: '未渗透', value: row.untouched, tone: 'neutral' }
+];
 const downloadTemplate = () => { window.location.href = `${apiBase}/strategic/template`; };
 
 function useStrategic(path, revision) {
@@ -334,6 +341,10 @@ export default function StrategicCustomers({ ref, kpiMode, refreshToken, onOpenL
             <Metric label="已流失" value={totals.lost} className={totals.lost > 0 ? 'rev-negative' : ''} note="曾有专线，现已全部销户" />
             <Metric label="未渗透" value={totals.untouched} note={`从未有过专线 · 含已流失共 ${totals.notPenetrated}`} />
           </section>
+          <section className="strategic-composition" aria-label="战客构成">
+            <SegmentBar label="战客构成" segments={composition(totals)} />
+            <SegmentLegend segments={composition(totals)} />
+          </section>
 
           {showingManagers ? (
             <section className="rev-section">
@@ -346,6 +357,7 @@ export default function StrategicCustomers({ ref, kpiMode, refreshToken, onOpenL
                 { key: 'total', label: '战客集团', numeric: true },
                 { key: 'penetrated', label: '已渗透', numeric: true },
                 { key: 'penetrationRate', label: '渗透率', numeric: true, render: (row) => percent(row.penetrationRate) },
+                { key: 'composition', label: '渗透构成', sortable: false, render: (row) => <span className="strategic-row-bar"><SegmentBar thin label={`${row.name || '未填写'}的战客构成`} segments={composition(row)} /></span> },
                 { key: 'lost', label: '已流失', numeric: true, render: (row) => <span className={row.lost > 0 ? 'rev-negative' : ''}>{row.lost}</span> },
                 { key: 'untouched', label: '未渗透', numeric: true },
                 { key: 'notPenetrated', label: '未渗透+已流失', numeric: true },

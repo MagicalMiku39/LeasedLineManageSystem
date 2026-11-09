@@ -518,10 +518,22 @@ test('KPI achievement counts this year net, matches groups and keeps forecasts',
   const stats = await (await request(`/api/stats?month=${today.slice(0, 7)}&kpiMode=1`)).json();
   const overview = await (await request('/api/kpi?kpiMode=1')).json();
   assert.equal(overview.target, 230);
-  assert.deepEqual(overview.months, [11, 12]);
+  // Forecasts can be set from this month to the end of next year.
+  const thisYear = Number(today.slice(0, 4));
+  const monthNow = Number(today.slice(5, 7));
+  assert.equal(overview.currentMonth, monthNow);
+  assert.deepEqual(overview.months[0], { year: thisYear, month: monthNow });
+  assert.equal(overview.months.length, 12 - monthNow + 1 + 12);
+  assert.deepEqual(overview.months.at(-1), { year: thisYear + 1, month: 12 });
   assert.equal(overview.actual.added, stats.addedInCurrentYear);
   assert.equal(overview.actual.cancelled, stats.cancelledInCurrentYear);
   assert.equal(overview.actual.net, stats.addedInCurrentYear - stats.cancelledInCurrentYear);
+  // The month-by-month series adds up to the year's totals, this month included.
+  assert.deepEqual(overview.monthly.map((row) => row.month), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  assert.equal(overview.monthly.reduce((sum, row) => sum + row.added, 0), overview.actual.added);
+  assert.equal(overview.monthly.reduce((sum, row) => sum + row.cancelled, 0), overview.actual.cancelled);
+  const thisMonth = overview.monthly[Number(today.slice(5, 7)) - 1];
+  assert.ok(thisMonth.added >= 2 && thisMonth.cancelled >= 1);
   const zhang = overview.managers.find((row) => row.manager_name === '张凯');
   assert.ok(zhang.added >= 2);
   assert.equal(zhang.net, zhang.added - zhang.cancelled);
@@ -534,7 +546,9 @@ test('KPI achievement counts this year net, matches groups and keeps forecasts',
   const invalid = [
     { group_code: '', product_type: '互联网专线', line_count: 1, month: 11 },
     { group_code: 'KPI001', product_type: '不存在', line_count: 1, month: 11 },
-    { group_code: 'KPI001', product_type: '互联网专线', line_count: 1, month: 10 },
+    { group_code: 'KPI001', product_type: '互联网专线', line_count: 1, year: thisYear - 1, month: 12 },
+    { group_code: 'KPI001', product_type: '互联网专线', line_count: 1, month: 13 },
+    { group_code: 'KPI001', product_type: '互联网专线', line_count: 1, month: 12, confidence: 'sure' },
     { group_code: 'KPI001', product_type: '互联网专线', line_count: 0, month: 12 },
     { group_code: 'NEW999', product_type: '互联网专线', line_count: 1, month: 12, group_name: '' }
   ];
@@ -544,7 +558,7 @@ test('KPI achievement counts this year net, matches groups and keeps forecasts',
 
   // A known group takes the ledger's name and manager, whatever the form sent.
   const known = await request('/api/kpi/forecasts', {
-    method: 'POST', body: { group_code: 'KPI001', group_name: 'typed', manager_name: '王倩', product_type: '互联网专线', line_count: 3, month: 11 }
+    method: 'POST', body: { group_code: 'KPI001', group_name: 'typed', manager_name: '王倩', product_type: '互联网专线', line_count: 3, month: 12 }
   });
   assert.equal(known.status, 201);
   const knownRow = await known.json();
@@ -569,7 +583,8 @@ test('KPI achievement counts this year net, matches groups and keeps forecasts',
   assert.equal(next.forecast.added, 5);
   assert.equal(next.forecast.cancelled, 1);
   assert.equal(next.forecast.net, 4);
-  assert.deepEqual(next.forecast.byMonth, { 11: { added: 3, cancelled: 0 }, 12: { added: 2, cancelled: 1 } });
+  assert.deepEqual(next.forecast.byMonth, { 12: { added: 5, cancelled: 1 } });
+  assert.deepEqual(next.forecast.byConfidence.unrated, { added: 5, cancelled: 1 }, 'a forecast sent without a confidence level waits to be rated');
   assert.equal(next.forecast.expectedNet, next.actual.net + 5 - 1);
 
   // The year's target is editable and replaces the default.
@@ -655,7 +670,7 @@ test('new lines are offered to the forecast they may answer, and nothing counts 
   };
   const overview = async () => (await request('/api/kpi?kpiMode=1')).json();
   const forecastIn = (data, id) => data.forecasts.find((row) => row.id === id);
-  const create = async (body) => (await (await request('/api/kpi/forecasts', { method: 'POST', body: { group_code: 'SUG1', group_name: '建议集团', manager_name: '甲', month: 11, ...body } })).json()).id;
+  const create = async (body) => (await (await request('/api/kpi/forecasts', { method: 'POST', body: { group_code: 'SUG1', group_name: '建议集团', manager_name: '甲', month: 12, ...body } })).json()).id;
   const decide = (id, lineId, action) => request(`/api/kpi/forecasts/${id}/matches`, { method: 'POST', body: { line_id: lineId, action } });
   const lineIdOf = (code) => db.prepare('SELECT id FROM leased_line WHERE group_product_code = ?').get(code).id;
 
@@ -1077,6 +1092,67 @@ test('the workbench sums up the latest import, KPI progress, open warnings and s
   assert.deepEqual([withoutList.strategic.listed, withoutList.strategic.changes.length], [false, 0]);
   assert.equal((await request('/api/workbench', {}, false)).status, 401);
   db.exec("DELETE FROM line_warning_mark WHERE line_id IN (SELECT id FROM leased_line WHERE group_product_code LIKE 'WBL%'); DELETE FROM leased_line WHERE group_product_code LIKE 'WBL%'");
+});
+
+test('KPI forecasts carry a confidence level, open months, overdue marks, next year reserve and time pace', async () => {
+  const { createKpiRouter: kpiRouterFor } = await import('../server/lib/kpi.js');
+  const rules = await import('../server/lib/ledger-rules.js');
+  // A fixed day, so the calendar rules do not depend on when the tests run.
+  const today = () => ({ year: 2026, month: 11, day: 10, dayOfYear: 314, daysInYear: 365 });
+  const router = kpiRouterFor({
+    db,
+    leasedLineSource: serverModule.leasedLineSource,
+    currentUser: () => null,
+    currentPeriod: () => ({ year: 2026, yearStart: '2026-01-01', nextYearStart: '2027-01-01' }),
+    addedStatuses: rules.addedStatuses,
+    cancelledStatuses: rules.cancelledStatuses,
+    productTypes: rules.kpiProductNames,
+    today
+  });
+  const insert = db.prepare(`INSERT INTO kpi_forecast (year, month, kind, group_code, group_name, manager_name, product_type, line_count, landed_count, confidence, created_at, updated_at)
+    VALUES (?, ?, ?, 'CONF', '把握集团', '甲', '互联网专线', ?, ?, ?, ?, ?)`);
+  const at = nowIso();
+  insert.run(2026, 9, 'added', 3, 1, 'possible', at, at); // two of three still to land, and September has passed
+  insert.run(2026, 12, 'added', 4, 0, 'certain', at, at);
+  insert.run(2026, 12, 'cancelled', 1, 0, 'likely', at, at);
+  insert.run(2026, 10, 'added', 2, 2, 'watch', at, at); // landed in full: not overdue
+  insert.run(2027, 3, 'added', 5, 0, 'watch', at, at); // next year's reserve
+  const base = router.overview({ kpiMode: '1' });
+  const mine = (rows) => rows.filter((row) => row.group_code === 'CONF');
+
+  assert.deepEqual(base.months.slice(0, 3), [{ year: 2026, month: 11 }, { year: 2026, month: 12 }, { year: 2027, month: 1 }]);
+  assert.equal(base.currentMonth, 11);
+  assert.deepEqual(mine(base.forecasts).map((row) => [row.month, row.overdue]), [[9, true], [10, false], [12, false], [12, false]]);
+  assert.ok(base.forecast.overdue.forecasts >= 1 && base.forecast.overdue.added >= 2);
+  assert.deepEqual(mine(base.reserve).map((row) => [row.year, row.month, row.confidence]), [[2027, 3, 'watch']]);
+  assert.ok(!base.forecasts.some((row) => row.year === 2027), 'the reserve never counts toward this year');
+  assert.ok(base.forecast.byConfidence.certain.added >= 4);
+  assert.ok(base.forecast.byConfidence.likely.cancelled >= 1);
+  assert.ok(base.forecast.byConfidence.possible.added >= 2);
+  assert.equal(Object.values(base.forecast.byConfidence).reduce((sum, level) => sum + level.added, 0), base.forecast.added);
+  assert.deepEqual(base.pace, { elapsed: 314 / 365, dayOfYear: 314, daysInYear: 365, expected: Math.round(base.target * 314 / 365) });
+
+  // Over HTTP: rating and moving a forecast are checked and leave a line in its progress.
+  const created = await request('/api/kpi/forecasts', {
+    method: 'POST', body: { group_code: 'CONF2', group_name: '把握集团二', manager_name: '甲', product_type: '互联网专线', line_count: 1, month: 12, confidence: 'possible' }
+  });
+  assert.equal(created.status, 201);
+  const id = (await created.json()).id;
+  const patch = (body) => request(`/api/kpi/forecasts/${id}`, { method: 'PATCH', body });
+  assert.equal((await patch({ confidence: 'sure' })).status, 400);
+  assert.equal((await patch({ year: 2000, month: 12 })).status, 400);
+  const rated = await patch({ confidence: 'certain' });
+  assert.equal(rated.status, 200);
+  assert.equal((await rated.json()).confidence, 'certain');
+  const thisYear = Number(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric' }).format(new Date()));
+  const moved = await patch({ year: thisYear + 1, month: 2 });
+  assert.equal(moved.status, 200);
+  const movedRow = await moved.json();
+  assert.deepEqual([movedRow.year, movedRow.month], [thisYear + 1, 2]);
+  const notes = (await (await request(`/api/kpi/forecasts/${id}/progress`)).json()).entries.map((entry) => entry.note);
+  assert.deepEqual(notes, [`预计月份：${thisYear}年12月 → ${thisYear + 1}年2月`, '把握度：在谈 → 已签约']);
+
+  db.exec("DELETE FROM kpi_forecast WHERE group_code IN ('CONF', 'CONF2')");
 });
 
 test('existing forecasts marked as landed count as fully landed after the upgrade', () => {

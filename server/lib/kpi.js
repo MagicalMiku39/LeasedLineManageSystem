@@ -2,10 +2,35 @@ import { Router } from 'express';
 
 // Default annual target (net additions: added minus cancelled lines) until one is set for the year.
 export const annualNetTarget = 230;
-// Forecasts cover the rest of the year only.
-export const forecastMonths = [11, 12];
 // A forecast is either lines expected to open or lines expected to be cancelled.
 export const forecastKinds = ['added', 'cancelled'];
+// How sure a forecast is, most sure first. The page names each level for its kind (已签约 for an
+// addition, 已提交销户 for a cancellation); nothing is weighted, the levels are only added up apart.
+export const confidenceLevels = ['certain', 'likely', 'possible', 'watch', 'unrated'];
+const confidenceWords = {
+  added: { certain: '已签约', likely: '已下单施工中', possible: '在谈', watch: '意向', unrated: '未评估' },
+  cancelled: { certain: '已提交销户', likely: '基本确定', possible: '有销户风险', watch: '观察中', unrated: '未评估' }
+};
+const confidenceNames = (kind) => confidenceWords[kind] || confidenceWords.added;
+const monthName = (year, month) => `${year}年${month}月`;
+
+// Today in Beijing: the month decides which forecast months are open and which are overdue.
+function beijingToday(date = new Date()) {
+  const [year, month, day] = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' })
+    .format(date).split('-').map(Number);
+  const dayOfYear = (Date.UTC(year, month - 1, day) - Date.UTC(year, 0, 1)) / 86400000 + 1;
+  const daysInYear = (Date.UTC(year + 1, 0, 1) - Date.UTC(year, 0, 1)) / 86400000;
+  return { year, month, day, dayOfYear, daysInYear };
+}
+
+// Forecasts can be entered from this month to the end of the year, and for any month of next
+// year, which is kept apart as next year's reserve and never counts toward this year.
+export function openForecastMonths(today = beijingToday()) {
+  const months = [];
+  for (let month = today.month; month <= 12; month += 1) months.push({ year: today.year, month });
+  for (let month = 1; month <= 12; month += 1) months.push({ year: today.year + 1, month });
+  return months;
+}
 
 const groupMatchLimit = 20;
 const maxProgressNote = 500;
@@ -20,7 +45,7 @@ function placeholders(values) {
  * to be cancelled. A forecast marked as landed stays on record but no longer counts, since the
  * real line is then already in the actual numbers.
  */
-export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeriod, addedStatuses, cancelledStatuses, productTypes }) {
+export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeriod, addedStatuses, cancelledStatuses, productTypes, today = beijingToday }) {
   const router = Router();
   db.exec(`CREATE TABLE IF NOT EXISTS kpi_forecast (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,6 +70,10 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
   if (!forecastColumns.includes('landed_count')) {
     db.exec(`ALTER TABLE kpi_forecast ADD COLUMN landed_count INTEGER NOT NULL DEFAULT 0;
       UPDATE kpi_forecast SET landed_count = line_count WHERE landed = 1;`);
+  }
+  // Forecasts from before confidence levels wait for someone to rate them.
+  if (!forecastColumns.includes('confidence')) {
+    db.exec("ALTER TABLE kpi_forecast ADD COLUMN confidence TEXT NOT NULL DEFAULT 'unrated'");
   }
   db.exec(`CREATE TABLE IF NOT EXISTS kpi_forecast_progress (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,15 +117,22 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
   }
 
   const forecastSelect = `SELECT f.id, f.year, f.month, f.kind, f.group_code, f.group_name, f.manager_name, f.product_type,
-      f.line_count, f.landed_count, f.created_at, f.updated_at,
+      f.line_count, f.landed_count, f.confidence, f.created_at, f.updated_at,
       (SELECT note FROM kpi_forecast_progress p WHERE p.forecast_id = f.id ORDER BY p.id DESC LIMIT 1) AS latest_note,
       (SELECT created_at FROM kpi_forecast_progress p WHERE p.forecast_id = f.id ORDER BY p.id DESC LIMIT 1) AS latest_at
     FROM kpi_forecast f`;
 
-  // Only the part not yet in the ledger still counts as a forecast.
+  // Only the part not yet in the ledger still counts as a forecast. One whose month has passed
+  // with part of it still to land is overdue; it keeps counting until it lands or is moved.
   function withRemaining(row) {
     const remaining = Math.max(row.line_count - row.landed_count, 0);
-    return { ...row, remaining, landed: remaining === 0 };
+    const now = today();
+    const overdue = remaining > 0 && (row.year < now.year || (row.year === now.year && row.month < now.month));
+    return { ...row, remaining, landed: remaining === 0, overdue };
+  }
+
+  function isOpenMonth(year, month) {
+    return openForecastMonths(today()).some((item) => item.year === year && item.month === month);
   }
 
   function forecastRows(year) {
@@ -175,36 +211,66 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     const added = managers.reduce((sum, row) => sum + row.added, 0);
     const cancelled = managers.reduce((sum, row) => sum + row.cancelled, 0);
     const forecasts = forecastRows(period.year).map((row) => ({ ...row, suggestions: suggestionsFor(row).length }));
+    const reserve = forecastRows(period.year + 1).map((row) => ({ ...row, suggestions: suggestionsFor(row).length }));
     const pending = forecasts.filter((row) => !row.landed);
     const total = (rows) => rows.reduce((sum, row) => sum + row.remaining, 0);
-    const byMonth = Object.fromEntries(forecastMonths.map((month) => {
-      const inMonth = pending.filter((row) => row.month === month);
-      return [month, {
-        added: total(inMonth.filter((row) => row.kind === 'added')),
-        cancelled: total(inMonth.filter((row) => row.kind === 'cancelled'))
-      }];
-    }));
+    const split = (rows) => ({
+      added: total(rows.filter((row) => row.kind === 'added')),
+      cancelled: total(rows.filter((row) => row.kind === 'cancelled'))
+    });
+    const byMonth = Object.fromEntries([...new Set(pending.map((row) => row.month))].sort((a, b) => a - b)
+      .map((month) => [month, split(pending.filter((row) => row.month === month))]));
+    const byConfidence = Object.fromEntries(confidenceLevels
+      .map((level) => [level, split(pending.filter((row) => (row.confidence || 'unrated') === level))]));
+    const overdue = pending.filter((row) => row.overdue);
     const forecastAdded = total(pending.filter((row) => row.kind === 'added'));
     const forecastCancelled = total(pending.filter((row) => row.kind === 'cancelled'));
     const actualNet = added - cancelled;
 
+    // The same lines by month of their start / status time, for the year's trend.
+    const perMonth = (column, statuses) => Object.fromEntries(db.prepare(
+      `SELECT CAST(substr(${column}, 6, 2) AS INTEGER) AS month, COUNT(*) AS count
+       FROM ${source}
+       WHERE ${column} >= ? AND ${column} < ? AND ${statusName} IN (${placeholders(statuses)})
+       GROUP BY month`
+    ).all(...range, ...statuses).map((row) => [row.month, row.count]));
+    const addedByMonth = perMonth('start_time', addedStatuses);
+    const cancelledByMonth = perMonth('status_time', cancelledStatuses);
+    const monthly = Array.from({ length: 12 }, (_, index) => ({
+      month: index + 1,
+      added: addedByMonth[index + 1] ?? 0,
+      cancelled: cancelledByMonth[index + 1] ?? 0
+    }));
+
+    // How much of the year has gone by, against how much of the target is done.
+    const now = today();
+    const target = targetFor(period.year);
+    const elapsed = now.year === period.year ? now.dayOfYear / now.daysInYear : null;
+
     return {
       year: period.year,
       lastImportAt: db.prepare("SELECT MAX(imported_at) AS at FROM import_batch WHERE status = 'finished'").get().at ?? null,
-      target: targetFor(period.year),
+      target,
       defaultTarget: annualNetTarget,
-      months: forecastMonths,
+      currentMonth: now.year === period.year ? now.month : null,
+      months: openForecastMonths(now),
+      confidenceLevels,
       productTypes,
       actual: { added, cancelled, net: actualNet },
+      monthly,
+      pace: elapsed === null ? null : { elapsed, dayOfYear: now.dayOfYear, daysInYear: now.daysInYear, expected: Math.round(target * elapsed) },
       forecast: {
         added: forecastAdded,
         cancelled: forecastCancelled,
         net: forecastAdded - forecastCancelled,
         byMonth,
+        byConfidence,
+        overdue: { forecasts: overdue.length, ...split(overdue) },
         expectedNet: actualNet + forecastAdded - forecastCancelled
       },
       managers,
-      forecasts
+      forecasts,
+      reserve
     };
   };
 
@@ -252,13 +318,16 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     const groupCode = String(body.group_code ?? '').trim();
     const productType = String(body.product_type ?? '').trim();
     const kind = body.kind ?? 'added';
+    const year = body.year === undefined ? currentPeriod().year : Number(body.year);
     const month = Number(body.month);
     const lineCount = Number(body.line_count);
+    const confidence = body.confidence ?? 'unrated';
     if (!forecastKinds.includes(kind)) return res.status(400).json({ error: '预计类别只能是新增或销户' });
     if (!groupCode) return res.status(400).json({ error: '请填写集团编码' });
     if (!productTypes.includes(productType)) return res.status(400).json({ error: '请选择产品类型' });
-    if (!forecastMonths.includes(month)) return res.status(400).json({ error: '预计月份只能选择 11 月或 12 月' });
+    if (!isOpenMonth(year, month)) return res.status(400).json({ error: '预计月份只能选本月到明年年底' });
     if (!Number.isSafeInteger(lineCount) || lineCount <= 0) return res.status(400).json({ error: '预计条数须为正整数' });
+    if (!confidenceLevels.includes(confidence)) return res.status(400).json({ error: '把握度不正确' });
 
     // A group already in the ledger keeps its own name and manager; a new group is entered by hand.
     const known = ledgerGroup(groupCode);
@@ -269,9 +338,9 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
 
     const now = new Date().toISOString();
     const result = db.prepare(
-      `INSERT INTO kpi_forecast (year, month, kind, group_code, group_name, manager_name, product_type, line_count, landed, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`
-    ).run(currentPeriod().year, month, kind, groupCode, groupName, managerName, productType, lineCount, currentUser(req)?.username || '', now, now);
+      `INSERT INTO kpi_forecast (year, month, kind, group_code, group_name, manager_name, product_type, line_count, landed, confidence, created_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`
+    ).run(year, month, kind, groupCode, groupName, managerName, productType, lineCount, confidence, currentUser(req)?.username || '', now, now);
     res.status(201).json(db.prepare('SELECT * FROM kpi_forecast WHERE id = ?').get(Number(result.lastInsertRowid)));
   });
 
@@ -285,6 +354,26 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     let landedCount = existing.landed_count;
     let note = '';
     let restoring = false;
+    // Rating a forecast or moving its month leaves a line in its progress, like any other change.
+    const notes = [];
+    let confidence = existing.confidence || 'unrated';
+    let year = existing.year;
+    let month = existing.month;
+    if (Object.hasOwn(body, 'confidence')) {
+      if (!confidenceLevels.includes(body.confidence)) return res.status(400).json({ error: '把握度不正确' });
+      if (body.confidence !== confidence) notes.push(`把握度：${confidenceNames(existing.kind)[confidence]} → ${confidenceNames(existing.kind)[body.confidence]}`);
+      confidence = body.confidence;
+    }
+    if (Object.hasOwn(body, 'month')) {
+      const nextYear = body.year === undefined ? existing.year : Number(body.year);
+      const nextMonth = Number(body.month);
+      if (nextYear !== existing.year || nextMonth !== existing.month) {
+        if (!isOpenMonth(nextYear, nextMonth)) return res.status(400).json({ error: '预计月份只能选本月到明年年底' });
+        notes.push(`预计月份：${monthName(existing.year, existing.month)} → ${monthName(nextYear, nextMonth)}`);
+        year = nextYear;
+        month = nextMonth;
+      }
+    }
     if (Object.hasOwn(body, 'line_count')) {
       lineCount = Number(body.line_count);
       if (!Number.isSafeInteger(lineCount) || lineCount <= 0) return res.status(400).json({ error: '预计条数须为正整数' });
@@ -299,12 +388,13 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
       if (landedCount !== existing.landed_count) note = body.landed ? `标记为${doneWord}` : '恢复为预计';
     }
     saveProgress(id, {
-      note,
+      note: [...notes, note].filter(Boolean).join('；'),
       landedCount,
       lineCount,
       username: currentUser(req)?.username || '',
       // Back to all forecast: lines confirmed for it are free to be suggested again.
       alsoInTransaction: () => {
+        db.prepare('UPDATE kpi_forecast SET confidence = ?, year = ?, month = ? WHERE id = ?').run(confidence, year, month, id);
         if (restoring) db.prepare("DELETE FROM kpi_forecast_match WHERE forecast_id = ? AND status = 'confirmed'").run(id);
       }
     });

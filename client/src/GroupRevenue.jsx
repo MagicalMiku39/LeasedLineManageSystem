@@ -1,6 +1,7 @@
 import React, { useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, ArrowUpDown, Building2, ChevronLeft, ChevronRight, FileSpreadsheet, History, ListChecks, Plus, RefreshCw, Save, Search, Settings2, Trash2, Upload, UsersRound, X, Pencil, CircleAlert } from 'lucide-react';
 import './revenue.css';
+import { GroupedBars } from './charts.jsx';
 
 const format = (value) => value == null ? '—' : Number(value).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const percent = (value) => value == null ? '—' : `${(value * 100).toFixed(2)}%`;
@@ -79,16 +80,18 @@ export function DataTable({ rows, columns, rowKey, initialSort, empty = '暂无�
   </>;
 }
 
+const trendSeries = [{ key: 'total', label: '集团收入' }, { key: 'line', label: '专线收入' }];
+
+// Month by month, the shared chart style; values stay printed at the right of each month.
 function Trend({ rows }) {
-  const maximum = Math.max(1, ...rows.flatMap((row) => [Math.abs(row.totalRevenue ?? 0), Math.abs(row.lineRevenue ?? 0)]));
   return <section className="rev-trend" aria-label="月度收入趋势">
-    <div className="rev-section-heading"><h3>收入趋势</h3><div className="rev-legend"><span><i className="rev-total-dot" />集团收入</span><span><i className="rev-line-dot" />专线收入</span></div></div>
-    <div className="rev-trend-grid">{rows.map((row) => <div className="rev-trend-month" key={row.month}>
-      <span>{row.month}{row.managerName && <small>{row.managerName}</small>}</span>
-      <div className="rev-trend-bars"><div title={`集团收入 ${format(row.totalRevenue)}`} style={{ width: `${Math.max(0, Math.abs(row.totalRevenue ?? 0) / maximum * 100)}%` }} className={`rev-total-bar ${row.totalRevenue < 0 ? 'rev-negative-bar' : ''}`} />
-        <div title={`专线收入 ${format(row.lineRevenue)}`} style={{ width: `${Math.max(0, Math.abs(row.lineRevenue ?? 0) / maximum * 100)}%` }} className={`rev-line-bar ${row.lineRevenue < 0 ? 'rev-negative-bar' : ''}`} /></div>
-      <div className="rev-trend-values"><strong>{format(row.totalRevenue)}</strong><span>{format(row.lineRevenue)}</span></div>
-    </div>)}</div>
+    <div className="rev-section-heading"><h3>收入趋势</h3></div>
+    <GroupedBars label="月度集团收入与专线收入" series={trendSeries} format={format} rows={rows.map((row, index) => ({
+      key: `${row.month}-${row.managerName || ''}-${index}`,
+      label: row.month,
+      sublabel: row.managerName,
+      values: { total: row.totalRevenue, line: row.lineRevenue }
+    }))} />
   </section>;
 }
 

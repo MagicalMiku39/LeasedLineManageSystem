@@ -29,6 +29,17 @@
   --gap: 14px;
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
   --mono: "SF Mono", Consolas, monospace;
+  /* Chart marks (checked with the dataviz palette validator against the white surface).
+     New / cancelled reuse --green / --red; the warning levels are a status palette. */
+  --chart-actual: #0071e3;
+  --chart-reference: #8e8e93;
+  --chart-neutral: #aeaeb2;
+  --chart-grid: #ececf0;
+  --chart-series-2: #1f9e89;
+  --chart-level-green: #2e9d5c;
+  --chart-level-yellow: #d9a400;
+  --chart-level-red: #e5484d;
+  --chart-level-cancel: #a11928;
 }
 
 /* ---------- base elements ---------- */
@@ -1402,6 +1413,477 @@ th.column-drop-after {
   color: var(--muted);
 }
 
+/* ---------- charts (client/src/charts.jsx) ---------- */
+.chart {
+  margin: 0;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chart-key {
+  display: inline-block;
+  width: 16px;
+  height: 0;
+  border-top: 2px solid var(--chart-actual);
+}
+
+.chart-key-reference { border-top-color: var(--chart-reference); }
+.chart-key-forecast { border-top-style: dashed; }
+
+.chart-plot {
+  position: relative;
+  min-width: 0;
+  border-radius: 8px;
+}
+
+.chart-plot:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+.chart-plot svg {
+  display: block;
+  overflow: visible;
+}
+
+.chart-grid {
+  stroke: var(--chart-grid);
+  stroke-width: 1;
+}
+
+.chart-crosshair {
+  stroke: var(--control);
+  stroke-width: 1;
+}
+
+.chart-tick {
+  fill: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chart-line-actual { stroke: var(--chart-actual); }
+.chart-line-reference { stroke: var(--chart-reference); stroke-width: 1.5; }
+.chart-line-forecast { stroke: var(--chart-actual); stroke-dasharray: 5 4; }
+
+.chart-dot {
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.chart-dot-actual { fill: var(--chart-actual); }
+.chart-dot-forecast { fill: var(--surface); stroke: var(--chart-actual); }
+
+.chart-label {
+  fill: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chart-label-muted {
+  fill: var(--muted);
+  font-weight: 500;
+}
+
+.chart-tooltip {
+  position: absolute;
+  top: 6px;
+  z-index: 2;
+  display: grid;
+  gap: 2px;
+  min-width: 160px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow-float);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.5;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.chart-note {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.chart-table {
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.chart-table summary {
+  color: var(--accent-ink);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+/* A row's new lines against its cancelled ones; the numbers are in the row's cells. */
+.polarity-bar {
+  display: inline-flex;
+  width: 96px;
+  height: 8px;
+  vertical-align: middle;
+}
+
+.polarity-half {
+  display: flex;
+  flex: 1;
+}
+
+.polarity-left {
+  justify-content: flex-end;
+  padding-right: 1px;
+  border-right: 1px solid var(--control);
+}
+
+.polarity-right {
+  padding-left: 1px;
+}
+
+.polarity-half i {
+  display: block;
+  height: 100%;
+}
+
+.polarity-left i {
+  border-radius: 4px 0 0 4px;
+  background: var(--red);
+}
+
+.polarity-right i {
+  border-radius: 0 4px 4px 0;
+  background: var(--green);
+}
+
+/* One whole split into parts: 2px surface gaps, rounded outer ends. */
+.segment-bar {
+  display: flex;
+  gap: 2px;
+  width: 100%;
+  height: 28px;
+  overflow: hidden;
+  border-radius: 6px;
+}
+
+.segment-bar.segment-thin {
+  height: 8px;
+  border-radius: 4px;
+}
+
+.segment-bar.segment-empty {
+  background: var(--chart-grid);
+}
+
+.segment {
+  display: flex;
+  align-items: center;
+  min-width: 2px;
+  height: 100%;
+  margin: 0;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 0;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.segment-thin .segment {
+  padding: 0;
+}
+
+button.segment {
+  cursor: pointer;
+}
+
+.segment-dim {
+  opacity: .35;
+}
+
+.segment-good { background: var(--green); }
+.segment-bad { background: var(--red); }
+.segment-neutral { background: var(--chart-neutral); color: var(--ink); }
+.segment-level-green { background: var(--chart-level-green); }
+.segment-level-yellow { background: var(--chart-level-yellow); color: var(--ink); }
+.segment-level-red { background: var(--chart-level-red); }
+.segment-level-cancel { background: var(--chart-level-cancel); }
+
+.segment-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.segment-legend > span,
+.segment-legend > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.segment-legend > button {
+  height: auto;
+  padding: 2px 6px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.segment-legend > button[aria-pressed="true"] {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.segment-legend strong {
+  color: var(--ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.segment-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+/* The gap bridge: done, then each confidence level surest first (one blue, light to dark,
+   checked as an ordinal ramp), unrated in neutral gray, and what is still missing as track. */
+.segment-tier-done { background: #003a80; }
+.segment-tier-certain { background: #0a5cbb; }
+.segment-tier-likely { background: #3480d8; }
+.segment-tier-possible { background: #5f9de3; color: var(--ink); }
+.segment-tier-watch { background: #88b5ea; color: var(--ink); }
+.segment-tier-unrated { background: var(--chart-neutral); color: var(--ink); }
+.segment-tier-gap { background: #eef4fb; color: var(--ink); }
+
+/* Time gone by against target done: two bars on one 0–100% scale. */
+.pace {
+  display: grid;
+  gap: 8px;
+}
+
+.pace-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.pace-label {
+  color: var(--muted);
+}
+
+.pace-track {
+  display: block;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--chart-grid);
+}
+
+.pace-track i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+
+.pace-time { background: var(--chart-reference); }
+.pace-done { background: var(--chart-actual); }
+
+.pace-value {
+  min-width: 92px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.pace-value small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.pace-summary {
+  margin: 2px 0 0;
+  font-size: 13px;
+}
+
+/* On a phone each bar takes the full width under its label and value. */
+@media (max-width: 480px) {
+  .pace-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px 12px;
+  }
+
+  .pace-track {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .pace-value {
+    min-width: 0;
+  }
+
+  .pace-value small {
+    display: inline;
+    margin-left: 6px;
+  }
+}
+
+/* Progress toward a target: done, plus what forecasts would add, on a lighter blue track. */
+.meter {
+  display: flex;
+  gap: 2px;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(0, 113, 227, .1);
+}
+
+.meter-done { background: var(--chart-actual); border-radius: 999px 0 0 999px; }
+.meter-more { background: rgba(0, 113, 227, .4); }
+
+.meter-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.meter-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.meter-legend strong {
+  color: var(--ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.meter-key {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.meter-key-done { background: var(--chart-actual); }
+.meter-key-more { background: rgba(0, 113, 227, .4); }
+.meter-target { margin-left: auto; }
+
+/* A few series per row on one scale; values at the right in text colors. */
+.grouped-rows {
+  display: grid;
+  gap: 12px;
+  max-height: 300px;
+  overflow: auto;
+}
+
+.grouped-row {
+  display: grid;
+  grid-template-columns: 96px minmax(70px, 1fr) 130px;
+  align-items: center;
+  gap: 18px;
+}
+
+.grouped-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.grouped-label small {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+}
+
+.grouped-bars-cell {
+  display: grid;
+  gap: 2px;
+}
+
+.grouped-bar {
+  display: block;
+  height: 8px;
+  max-width: 100%;
+  border-radius: 0 4px 4px 0;
+}
+
+.grouped-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.grouped-total { background: var(--chart-actual); }
+.grouped-line { background: var(--chart-series-2); }
+.grouped-bar.grouped-negative { background: var(--red); }
+
+.grouped-values {
+  display: grid;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.grouped-values strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .grouped-row {
+    grid-template-columns: 62px minmax(30px, 1fr) 101px;
+    gap: 10px;
+  }
+
+  .grouped-values {
+    font-size: 11px;
+  }
+}
+
 /* ---------- detail drawer and batch modal ---------- */
 .drawer {
   position: fixed;
@@ -1786,8 +2268,9 @@ th.column-drop-after {
     justify-content: space-between;
   }
 
+  /* Share the row while both fit; wrap to one per line before the labels would overlap. */
   .scope-actions button {
-    flex: 1;
+    flex: 1 1 auto;
   }
 
   .table-title {

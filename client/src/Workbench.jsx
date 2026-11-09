@@ -1,6 +1,7 @@
 import React, { useEffect, useImperativeHandle, useState } from 'react';
 import { ArrowRight, FileSpreadsheet, RefreshCw } from 'lucide-react';
 import { isAbort, requestJson } from './api.js';
+import { ProgressMeter } from './charts.jsx';
 import { DataTable, Loader, Metric, Notice } from './GroupRevenue.jsx';
 import { changeTypes, dataFreshness } from './ledgerChanges.js';
 import { strategicStatuses } from './StrategicCustomers.jsx';
@@ -142,6 +143,9 @@ export default function Workbench({ ref, kpiMode, refreshToken, onNavigate }) {
             <Metric label="距目标还差" value={Math.max(kpi.gap, 0)} className={kpi.gap <= 0 ? 'rev-positive' : ''} note={kpi.gap <= 0 ? `已超出目标 ${-kpi.gap}` : '目标减去当前净增'} />
             <Metric label="每月需净增" value={kpi.perMonth} note={`今年还剩 ${kpi.monthsLeft} 个月（含本月）`} />
             <Metric label="计入预计后还差" value={Math.max(kpi.gapAfterForecast, 0)} className={kpi.gapAfterForecast <= 0 ? 'rev-positive' : ''} note={`未落地的预计新增 ${kpi.forecast.added}、预计销户 ${kpi.forecast.cancelled}`} />
+          </section>
+          <section className="workbench-meter" aria-label="年度净增进度">
+            <ProgressMeter value={kpi.actual.net} forecast={kpi.forecast.added - kpi.forecast.cancelled} target={kpi.target} valueLabel={`${kpi.year} 年净增`} />
           </section>
 
           <div className="workbench-grid">
