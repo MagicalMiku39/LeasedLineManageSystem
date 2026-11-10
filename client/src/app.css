@@ -177,7 +177,6 @@ textarea::placeholder {
 /* Tables: shared defaults (the revenue and operations pages refine them). */
 table {
   width: 100%;
-  min-width: 1320px;
   border-collapse: separate;
   border-spacing: 0;
 }
@@ -861,6 +860,12 @@ main {
   top: 44px;
   left: 0;
   width: max(100%, 240px);
+  max-width: calc(100vw - 32px);
+}
+
+.multi-select.align-end .multi-select-menu {
+  left: auto;
+  right: 0;
 }
 
 .multi-select-menu label,
@@ -1235,6 +1240,12 @@ button.stat-cell:focus-visible {
 .ledger-page .table-scroll {
   max-height: calc(100dvh - 260px);
   min-height: 240px;
+}
+
+/* The ledger keeps its wide floor so its many columns stay readable; other tables size to
+   their own columns and only scroll when those truly do not fit. */
+.ledger-table {
+  min-width: 1320px;
 }
 
 .ledger-table th {

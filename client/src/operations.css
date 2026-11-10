@@ -28,7 +28,16 @@
 .operations-table-wrap table { width: 100%; border-collapse: collapse; white-space: nowrap; }
 .operations-table-wrap td, .operations-table-wrap th { padding: 16px 14px; font-size: 13px; }
 .operations-table-wrap button.operations-link { border: 0; background: none; padding: 0; color: #2563a5; box-shadow: none; }
-.operations-row-actions { display: flex; gap: 6px; min-width: 200px; }
+.warning-table td, .warning-table th { padding-left: 12px; padding-right: 12px; }
+/* The group name wraps under its own width with the code beneath, so a long name cannot push
+   the table past the page; the actions stay pinned right where a narrow screen still scrolls. */
+.operations-table-wrap .operations-group-cell { min-width: 140px; max-width: 240px; white-space: normal; overflow-wrap: anywhere; line-height: 1.45; }
+.operations-group-cell .operations-link { display: block; height: auto; min-height: 0; text-align: left; font: inherit; line-height: inherit; white-space: normal; }
+.operations-stack-cell { line-height: 1.45; }
+.operations-group-cell small, .operations-stack-cell small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+.operations-table-wrap .operations-actions-cell { position: sticky; right: 0; z-index: 1; background: var(--surface); border-left: 1px solid var(--rule); }
+.operations-table-wrap thead .operations-actions-cell { z-index: 2; }
+.operations-row-actions { display: flex; gap: 6px; }
 .operations-row-actions button { border-radius: 6px; padding: 6px 8px; font-size: 12px; }
 .operations-row-actions button[aria-pressed=true] { background: #edf4ff; border-color: #87aedd; color: #255ea4; }
 .operations-ignored { color: #6e6e73; }
@@ -200,4 +209,6 @@ td > .kpi-inline-select:first-child { margin-top: 0; }
   .operations-heading h2 { font-size: 24px; }
   .warning-mail-dialog { padding: 16px; }
   .warning-mail-contact-form label { min-width: 0; flex-basis: 100%; }
+  /* On a phone a pinned actions column would cover half the table: let it scroll with the rest. */
+  .operations-table-wrap .operations-actions-cell, .kpi-table .kpi-actions-cell { position: static; border-left: 0; }
 }

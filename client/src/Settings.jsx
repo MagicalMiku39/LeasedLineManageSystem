@@ -276,7 +276,7 @@ function Backups({ reloadKey, onCode, onDataRestored }) {
               <tr key={item.name}>
                 <td>{beijingTime(item.createdAt)}</td>
                 <td>{labels[item.reason] || item.reason}</td>
-                <td>{item.detail || '—'}</td>
+                <td className="settings-wrap-cell">{item.detail || '—'}</td>
                 <td className="numeric">{item.counts?.leasedLines ?? '—'}</td>
                 <td className="numeric">{megabytes(item.size)}</td>
                 <td>

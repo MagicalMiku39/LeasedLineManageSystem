@@ -7,6 +7,8 @@ export default function MultiSelectFilter({ value, onChange, options, label, cle
   const selected = Array.isArray(value) ? value : [];
   const container = useRef(null);
   const [open, setOpen] = useState(false);
+  // A filter near the right edge (the second column on a phone) opens its menu leftwards.
+  const [alignEnd, setAlignEnd] = useState(false);
   const close = useCallback(() => {
     if (container.current) container.current.open = false;
     setOpen(false);
@@ -15,9 +17,17 @@ export default function MultiSelectFilter({ value, onChange, options, label, cle
 
   return (
     <details
-      className="multi-select"
+      className={alignEnd ? 'multi-select align-end' : 'multi-select'}
       ref={container}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
+      onToggle={(event) => {
+        const element = event.currentTarget;
+        if (element.open) {
+          const menu = element.querySelector('.multi-select-menu');
+          const left = element.getBoundingClientRect().left;
+          setAlignEnd(left + (menu?.offsetWidth || 240) > document.documentElement.clientWidth - 8);
+        }
+        setOpen(element.open);
+      }}
       onKeyDown={(event) => {
         if (event.key === 'Escape' && container.current?.open) {
           event.stopPropagation();
