@@ -27,6 +27,7 @@ import { createRevenueRouter } from './lib/revenue.js';
 import { createWarningsRouter } from './lib/warnings.js';
 import { createKpiRouter } from './lib/kpi.js';
 import { createStrategicRouter } from './lib/strategic.js';
+import { createGroupsRouter } from './lib/groups.js';
 import { createWorkbenchRouter } from './lib/workbench.js';
 import { clientCertPaths, createClientCertListener, requestSource } from './lib/client-cert.js';
 import { readClientCertSettings } from './lib/client-cert-admin.js';
@@ -993,6 +994,13 @@ const strategicRouter = createStrategicRouter({
   beforeReplace: (req, fileName) => backups.create('strategic-import', { detail: fileName, createdBy: currentUser(req)?.username || '' })
 });
 app.use('/api/strategic', strategicRouter);
+app.use('/api/groups', createGroupsRouter({
+  db,
+  leasedLineSource,
+  currentUser,
+  normalizeFileName: normalizeUploadedFilename,
+  beforeReplace: (req, fileName) => backups.create('group-import', { detail: fileName, createdBy: currentUser(req)?.username || '' })
+}));
 app.use('/api/workbench', createWorkbenchRouter({ db, leasedLineSource, kpi: kpiRouter, strategic: strategicRouter, repairName: repairMojibake }));
 
 if (existsSync(distDir)) {

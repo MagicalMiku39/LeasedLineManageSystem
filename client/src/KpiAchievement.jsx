@@ -58,7 +58,7 @@ function useGroupMatches(keyword) {
   return state;
 }
 
-export default function KpiAchievement({ ref, kpiMode, refreshToken }) {
+export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -295,7 +295,9 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken }) {
       </td>
       <td className="kpi-wrap kpi-group-cell">
         <strong>{row.group_name}</strong>
-        <small>{row.group_code}</small>
+        <small>{onOpenGroup
+          ? <button type="button" className="group-link" title="查看集团档案" onClick={(event) => { event.stopPropagation(); onOpenGroup(row.group_code); }}>{row.group_code} · 集团档案</button>
+          : row.group_code}</small>
         {row.suggestions > 0 && <span className="status-pill kpi-suggestion-pill">可能已{row.kind === 'cancelled' ? '销户' : '落地'} {row.suggestions}</span>}
       </td>
       <td>{row.manager_name}</td>

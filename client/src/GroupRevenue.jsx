@@ -172,7 +172,7 @@ function ServiceForm({ service, groupCode, month, rows, onSaved, onClose }) {
   </form>;
 }
 
-function GroupDetail({ data, month, onOpenLine, onRefresh }) {
+function GroupDetail({ data, month, onOpenLine, onRefresh, onOpenGroup }) {
   const [editing, setEditing] = useState(null), [deleting, setDeleting] = useState(null), [error, setError] = useState(''), [busy, setBusy] = useState(false);
   useEffect(() => { setEditing(null); setDeleting(null); setError(''); }, [month, data.group.groupCode]);
   async function remove() {
@@ -182,7 +182,7 @@ function GroupDetail({ data, month, onOpenLine, onRefresh }) {
   }
   const reconciled = data.reconciliation;
   return <>
-    <div className="rev-group-heading"><div><span className="rev-eyebrow">{data.group.groupCode}</span><h2>{data.group.groupName}</h2><p>{data.group.managerName || '本月无报表归属'} · {month}</p></div><span className="rev-label">当前在用台账 {data.group.currentLineCount} 条</span></div>
+    <div className="rev-group-heading"><div><span className="rev-eyebrow">{onOpenGroup ? <button type="button" className="group-link" title="查看集团档案" onClick={() => onOpenGroup(data.group.groupCode)}>{data.group.groupCode} · 集团档案</button> : data.group.groupCode}</span><h2>{data.group.groupName}</h2><p>{data.group.managerName || '本月无报表归属'} · {month}</p></div><span className="rev-label">当前在用台账 {data.group.currentLineCount} 条</span></div>
     {!data.group.hasReport && <Notice>该集团在本月没有报表记录，收入不按零计算。</Notice>}
     {data.group.managerChanged && <Notice>客户经理归属已从 {data.group.previousManagerName || '未填写'} 变更为 {data.group.managerName}。</Notice>}
     <Metrics data={data.group} /><Trend rows={data.trend} />
@@ -225,7 +225,7 @@ function GroupDetail({ data, month, onOpenLine, onRefresh }) {
   </>;
 }
 
-export default function GroupRevenue({ ref, onExportReady, kpiMode, defaultManagers, onOpenLine, refreshToken }) {
+export default function GroupRevenue({ ref, onExportReady, kpiMode, defaultManagers, onOpenLine, refreshToken, onOpenGroup }) {
   const [revision, setRevision] = useState(0), [month, setMonth] = useState(''), [selected, setSelected] = useState(null);
   const [view, setView] = useState('managers'), [manager, setManager] = useState(null), [group, setGroup] = useState(null);
   const [keyword, setKeyword] = useState(''), [filter, setFilter] = useState('all'), [importing, setImporting] = useState(false);
@@ -321,7 +321,7 @@ export default function GroupRevenue({ ref, onExportReady, kpiMode, defaultManag
     {settingsOpen && <form className="rev-settings" onSubmit={saveSettings}><label>舍入容差（原表金额单位）<input type="number" step="0.01" min="0" required value={tolerance} onChange={(event) => setTolerance(event.target.value)} /></label><button className="primary" disabled={settingBusy}><Save size={16} />保存</button>{settings.error && <Notice error>{settings.error}</Notice>}</form>}
     {importing && <ImportPanel onClose={() => setImporting(false)} onDone={(result) => { setImporting(false); setMessage(`导入完成：${result.months.join('、')}。报表明细已保存，展示范围以当前客户经理筛选为准。${result.invalidatedServices ? `${result.invalidatedServices} 项延伸服务需复核。` : ''}`); setMonth([...result.months].sort().at(-1)); setGroup(null); refresh(); }} />}
     {failure && <Notice error>{failure}<button onClick={refresh}><RefreshCw size={14} />重试</button></Notice>}
-    {loading ? <Loader /> : !meta.data?.months.length ? <section className="rev-empty"><FileSpreadsheet size={42} strokeWidth={1.3} /><h2>暂无集团收入</h2><p>7、8、9 月报表导入后将在这里展示。</p></section> : group ? detail.data && <GroupDetail data={detail.data} month={month} onOpenLine={onOpenLine} onRefresh={refresh} /> : <>
+    {loading ? <Loader /> : !meta.data?.months.length ? <section className="rev-empty"><FileSpreadsheet size={42} strokeWidth={1.3} /><h2>暂无集团收入</h2><p>7、8、9 月报表导入后将在这里展示。</p></section> : group ? detail.data && <GroupDetail onOpenGroup={onOpenGroup} data={detail.data} month={month} onOpenLine={onOpenLine} onRefresh={refresh} /> : <>
       <div className="rev-view-controls"><div className="rev-segment" role="group" aria-label="收入视图"><button aria-pressed={view === 'managers'} onClick={() => { setView('managers'); setManager(null); }}><UsersRound size={16} />客户经理</button><button aria-pressed={view === 'groups'} onClick={() => { setView('groups'); setManager(null); }}><Building2 size={16} />集团</button><button aria-pressed={view === 'history'} onClick={() => setView('history')}><History size={16} />收入导入记录</button></div>{view !== 'history' && <ManagerPicker options={managers} selected={selected || []} onChange={(values) => { setSelected(values); setManager(null); }} />}</div>
       {view !== 'history' && <div className="rev-manager-scope" role="status" aria-label="客户经理筛选范围">
         <span>{scopedManagerIds.length ? scopedManagers.length ? `当前范围：${manager !== null ? scopedManagers[0].name : `已选 ${scopedManagers.length} 位客户经理`}，未选经理的集团未显示` : '当前范围：所选客户经理在收入报表中无匹配记录' : '当前范围：全部客户经理'}</span>

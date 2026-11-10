@@ -12,7 +12,7 @@ const categoryStorageKey = 'ledger-settings-category';
 // The settings page's left-hand menu; each entry shows only its own sections.
 const settingsCategories = [
   { key: 'access', label: '访问控制', icon: KeyRound, description: '设备证书：让 IP 不固定的手机安全访问系统，不用逐个开放 IP 白名单。' },
-  { key: 'backup', label: '备份与恢复', icon: DatabaseBackup, description: '导入前和每周自动备份整个数据库；导错文件时回退台账类数据或战客清单，回退也可以撤销。' },
+  { key: 'backup', label: '备份与恢复', icon: DatabaseBackup, description: '导入前和每周自动备份整个数据库；导错文件时回退台账类数据、战客清单或全量集团清单，回退也可以撤销。' },
   { key: 'log', label: '安全日志', icon: ScrollText, description: '登录、设置页验证码、证书和端口、备份下载与回退的操作记录。' }
 ];
 
@@ -57,7 +57,7 @@ function restoreNotes(scope, preview) {
   const notes = [];
   const imports = preview.imports || [];
   const shown = imports.slice(0, 5).map((item) => `${item.fileName || '未命名'}（${beijingTime(item.importedAt)}）`).join('、');
-  const what = scope === 'strategic' ? '战客清单导入' : '台账导入';
+  const what = { strategic: '战客清单导入', groups: '全量集团清单导入' }[scope] || '台账导入';
   notes.push(imports.length ? `撤销备份之后的 ${imports.length} 次${what}：${shown}${imports.length > 5 ? ' 等' : ''}。` : `备份之后没有新的${what}。`);
   if (scope === 'ledger') {
     if (preview.linesAdded) notes.push(`备份之后新出现的 ${preview.linesAdded} 条专线会消失。`);
@@ -782,7 +782,7 @@ export default function Settings({ refreshToken, onDataRestored = () => {} }) {
               title="数据备份"
               description={(
                 <>
-                  <p>每次导入到达日清单、替换战客清单之前，以及每周一次自动备份。在列表中点“回退”，先看会撤销什么，再确认。</p>
+                  <p>每次导入到达日清单、替换战客清单或全量集团清单之前，以及每周一次自动备份。在列表中点“回退”，先看会撤销什么，再确认。</p>
                   <p>备份和数据库在同一台服务器上，防得了误操作，防不了服务器故障。请定期下载一份存到别处。</p>
                 </>
               )}

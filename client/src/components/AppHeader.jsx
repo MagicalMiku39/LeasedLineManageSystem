@@ -1,12 +1,13 @@
 import React, { useCallback, useRef, useState } from 'react';
-import { Building2, ChevronDown, Download, FileSpreadsheet, ListChecks, LogOut, RefreshCw, Settings, Upload, UsersRound } from 'lucide-react';
+import { Building2, ChevronDown, CircleDollarSign, Download, FileSpreadsheet, ListChecks, LogOut, RefreshCw, Settings, Upload, UsersRound } from 'lucide-react';
 import { useDismiss } from './useDismiss.js';
 
 // The main menu. 导入记录 lives under 台账, and 设置 is the gear beside 退出.
 export const views = [
   { key: 'ledger', label: '台账', icon: FileSpreadsheet },
+  { key: 'groups', label: '集团', icon: Building2 },
   { key: 'managers', label: '客户经理', icon: UsersRound },
-  { key: 'revenue', label: '集团收入', icon: Building2 },
+  { key: 'revenue', label: '集团收入', icon: CircleDollarSign },
   { key: 'operations', label: '运营中心', icon: ListChecks }
 ];
 const menuOf = { imports: 'ledger' };

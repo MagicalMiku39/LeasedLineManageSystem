@@ -16,6 +16,7 @@ const namePattern = /^ledger-\d{8}T\d{6}Z-[a-z-]+-[0-9a-f]{6}\.db\.gz$/;
 export const backupReasons = {
   'ledger-import': { label: '导入到达日清单前', keep: 30 },
   'strategic-import': { label: '替换战客清单前', keep: 10 },
+  'group-import': { label: '替换全量集团清单前', keep: 10 },
   weekly: { label: '每周自动', keep: 12 },
   manual: { label: '手动', keep: 10 },
   'before-restore': { label: '回退前', keep: 10 }
@@ -48,6 +49,13 @@ export const restoreScopes = {
     tables: [
       ['strategic_import', '战客清单导入记录'],
       ['strategic_customer', '战客集团']
+    ]
+  },
+  groups: {
+    label: '全量集团清单',
+    tables: [
+      ['group_directory_import', '全量集团清单导入记录'],
+      ['group_directory', '全量集团']
     ]
   }
 };
@@ -186,7 +194,7 @@ export function createBackupService({ db, dbPath, dir = process.env.BACKUP_DIR |
 
   function scopeOf(key) {
     const scope = restoreScopes[key];
-    if (!scope) throw new BackupError('请选择回退台账类数据还是战客清单');
+    if (!scope) throw new BackupError('请选择要回退的数据范围');
     return scope;
   }
 
@@ -224,9 +232,10 @@ export function createBackupService({ db, dbPath, dir = process.env.BACKUP_DIR |
   function describe(scopeKey) {
     const scope = scopeOf(scopeKey);
     const tables = scope.tables.map(([table, label]) => ({ table, label, current: rows('main', table), backup: rows('snap', table) }));
-    if (scopeKey === 'strategic') {
-      const kept = keys('snap', 'strategic_import', 'id');
-      const undone = db.prepare('SELECT id, file_name, imported_at FROM strategic_import ORDER BY id DESC').all().filter((row) => !kept.has(row.id));
+    const listImports = { strategic: 'strategic_import', groups: 'group_directory_import' }[scopeKey];
+    if (listImports) {
+      const kept = keys('snap', listImports, 'id');
+      const undone = db.prepare(`SELECT id, file_name, imported_at FROM ${listImports} ORDER BY id DESC`).all().filter((row) => !kept.has(row.id));
       return { tables, imports: undone.map((row) => ({ fileName: row.file_name, importedAt: row.imported_at })) };
     }
     const keptBatches = keys('snap', 'import_batch', 'id');
@@ -268,7 +277,7 @@ export function createBackupService({ db, dbPath, dir = process.env.BACKUP_DIR |
    */
   function restore(name, scopeKey, { createdBy = '' } = {}) {
     const scope = restoreScopes[scopeKey];
-    if (!scope) return Promise.reject(new BackupError('请选择回退台账类数据还是战客清单'));
+    if (!scope) return Promise.reject(new BackupError('请选择要回退的数据范围'));
     const target = list().find((item) => item.name === name);
     if (!target) return Promise.reject(new BackupError('找不到这个备份，可能已按保留规则清理'));
     const run = queue.then(async () => {
@@ -381,7 +390,7 @@ export function createBackupRouter({ backups, currentUser, verifyCode, logEvent 
     if (!mainPortOnly(req, res)) return;
     if (!backups.file(req.params.name)) return res.status(404).json({ error: '找不到这个备份，可能已按保留规则清理' });
     const scope = String(req.body?.scope || '');
-    if (!restoreScopes[scope]) return res.status(400).json({ error: '请选择回退台账类数据还是战客清单' });
+    if (!restoreScopes[scope]) return res.status(400).json({ error: '请选择要回退的数据范围' });
     if (!codeAccepted(req, res)) return;
     try {
       const result = await backups.restore(req.params.name, scope, { createdBy: currentUser(req)?.username || '' });

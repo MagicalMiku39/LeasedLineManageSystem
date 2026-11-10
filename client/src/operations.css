@@ -212,3 +212,35 @@ td > .kpi-inline-select:first-child { margin-top: 0; }
   /* On a phone a pinned actions column would cover half the table: let it scroll with the rest. */
   .operations-table-wrap .operations-actions-cell, .kpi-table .kpi-actions-cell { position: static; border-left: 0; }
 }
+
+/* ---------- 集团 ---------- */
+.groups-page .rev-group-filters > select { width: auto; min-width: 150px; }
+.group-badge { display: inline-block; margin-left: 6px; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 500; line-height: 1.5; white-space: nowrap; vertical-align: middle; }
+.group-badge-key { background: #e6f5f2; color: #17705f; }
+.group-badge-key139 { background: #fff5cf; color: #866000; }
+.group-badge-strategic { background: #edf4ff; color: #255ea4; }
+.group-badge-muted { background: #eeeef1; color: #5b5b64; }
+.group-badges { display: block; margin-top: 4px; }
+.group-badges:empty { display: none; }
+.group-badges .group-badge:first-child { margin-left: 0; }
+.group-title { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 2px; }
+.group-note { color: #a04e12; }
+.group-sub { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+.group-hints { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0 0 4px !important; font-size: 12px; }
+.group-hints .text-button { height: auto; padding: 2px 0; font-size: 12px; text-align: left; white-space: normal; }
+.group-empty { padding: 18px 0; color: var(--muted); font-size: 13px; }
+.group-more { margin: 4px 0 8px; }
+.group-more .text-button { padding: 0; font-size: 12px; }
+.group-more .strategic-preview { margin-top: 10px; }
+.group-tallies { margin: 12px 0; font-size: 12px; }
+.group-tallies p { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0 0 6px !important; }
+.group-tallies p > span:first-child { color: var(--muted); min-width: 56px; }
+.group-tally strong { font-weight: 600; }
+.group-wrap { display: block; min-width: 160px; max-width: 360px; white-space: normal; overflow-wrap: anywhere; }
+.group-wrap small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+.group-loading { opacity: .55; }
+button.group-link, .revenue-page button.group-link { display: inline; height: auto; min-height: 0; border: 0; border-radius: 0; background: none; padding: 0; color: #2563a5; font: inherit; text-align: left; white-space: normal; box-shadow: none; cursor: pointer; }
+button.group-link:hover { background: none; box-shadow: none; text-decoration: underline; }
+@media (max-width: 700px) {
+  .groups-page .rev-group-filters > select { width: 100%; }
+}

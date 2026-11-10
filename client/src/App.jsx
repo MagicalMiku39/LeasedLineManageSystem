@@ -7,6 +7,7 @@ import SubTabs from './components/SubTabs.jsx';
 import { AuthStatusView, LoginView, SetupView } from './components/AuthViews.jsx';
 import { NoticeBar } from './components/Feedback.jsx';
 import GroupRevenue from './GroupRevenue.jsx';
+import Groups from './Groups.jsx';
 import ImportRecords from './ImportRecords.jsx';
 import BatchModal from './ledger/BatchModal.jsx';
 import { defaultManagers } from './ledger/config.js';
@@ -30,6 +31,7 @@ const ledgerSections = [
 const refreshTitles = {
   ledger:'重新读取台账、统计和筛选项',
   managers: '重新统计客户经理净增',
+  groups: '重新读取集团',
   revenue: '重新读取收入数据',
   operations: '重新读取运营中心当前页面',
   imports: '重新读取导入记录',
@@ -67,6 +69,10 @@ function App() {
   const [showBatch, setShowBatch] = useState(false);
   const revenueActions = useRef(null);
   const operationsActions = useRef(null);
+  const groupsActions = useRef(null);
+  // Which group's profile the 集团 page shows; null is the list. A new object each time, so the page follows it.
+  const [groupFocus, setGroupFocus] = useState({ groupCode: null });
+  const [groupsRevision, setGroupsRevision] = useState(0);
   const [operationsSection, setOperationsSection] = useState('warnings');
   // Where the 导入概览's links point: a strategic group or an import batch, opened once each.
   const [strategicFocus, setStrategicFocus] = useState(null);
@@ -108,7 +114,17 @@ function App() {
     // A menu click is a fresh visit: no group or import left open by a 导入概览 link.
     setStrategicFocus(null);
     setImportsFocus(null);
+    if (view === 'groups') setGroupFocus({ groupCode: null });
     setActiveView(view);
+  }
+
+  // From any page: one group's profile. The line drawer closes so the profile is not left behind it.
+  function openGroup(groupCode) {
+    if (!groupCode) return;
+    setSelected(null);
+    setGroupFocus({ groupCode });
+    setActiveView('groups');
+    window.scrollTo(0, 0);
   }
 
   function changeOperationsSection(section) {
@@ -149,6 +165,7 @@ function App() {
       });
       setOperationsRevision((value) => value + 1);
       setImportsRevision((value) => value + 1);
+      setGroupsRevision((value) => value + 1);
       reloadLedgerPage();
       reloadOptions();
     } catch (error) {
@@ -197,12 +214,15 @@ function App() {
   // What the shared top-bar actions do on each page.
   const importAction = activeView === 'revenue'
     ? { kind: 'dialog', title: '导入收入报表', open: () => revenueActions.current?.openImport() }
+    : activeView === 'groups'
+      ? { kind: 'dialog', title: '导入全量集团清单', open: () => groupsActions.current?.openImport() }
     : activeView === 'operations' && operationsSection === 'strategic'
       ? { kind: 'dialog', title: '导入战客清单', open: () => operationsActions.current?.openImport?.() }
       : { kind: 'file', title: '导入专线台账 Excel', busy: uploading, onFile: uploadLedgerExcel };
 
   const exportActions = {
     operations: { title: '导出运营中心当前页面', run: () => operationsActions.current?.exportData() },
+    groups: { title: '导出集团（跟随当前筛选）', run: () => groupsActions.current?.exportData() },
     revenue: { title: '导出当前收入视图', run: () => revenueActions.current?.exportData(), disabled: !revenueExportReady }
   };
   const ledgerExport = { title: '导出台账', run: exportLedger, menu: ledgerExportMenu };
@@ -229,6 +249,10 @@ function App() {
     }
     if (activeView === 'revenue') {
       revenueActions.current?.refresh();
+      return;
+    }
+    if (activeView === 'groups') {
+      groupsActions.current?.refresh();
       return;
     }
     if (activeView === 'settings') {
@@ -267,6 +291,7 @@ function App() {
             onSectionChange={changeOperationsSection}
             strategicFocus={strategicFocus}
             onNavigate={navigate}
+            onOpenGroup={openGroup}
           />
         );
       case 'revenue':
@@ -278,8 +303,11 @@ function App() {
             defaultManagers={defaultManagers}
             refreshToken={revenueRevision}
             onOpenLine={(row) => openDetail(row.id)}
+            onOpenGroup={openGroup}
           />
         );
+      case 'groups':
+        return <Groups ref={groupsActions} kpiMode={kpiMode} refreshToken={groupsRevision} onOpenLine={openDetail} focus={groupFocus} />;
       case 'imports':
         return <ImportRecords refreshToken={importsRevision} onOpenLine={openDetail} focus={importsFocus} tabs={ledgerTabs} />;
       case 'settings':
@@ -293,6 +321,7 @@ function App() {
               setOperationsRevision((value) => value + 1);
               setImportsRevision((value) => value + 1);
               setRevenueRevision((value) => value + 1);
+              setGroupsRevision((value) => value + 1);
             }}
           />
         );
@@ -358,10 +387,12 @@ function App() {
       <DetailDrawer
         record={selected}
         onClose={() => setSelected(null)}
+        onOpenGroup={openGroup}
         onSaved={(record) => {
           setSelected(record);
           setRevenueRevision((value) => value + 1);
           setOperationsRevision((value) => value + 1);
+          setGroupsRevision((value) => value + 1);
           reloadLedgerPage();
         }}
       />

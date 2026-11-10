@@ -23,17 +23,17 @@ const sections = [
 
 // The operations centre: a sub-menu over its sections. The shared top-bar refresh, export and
 // (where a section has its own list to import) import act on the section that is open.
-export default function Operations({ ref, kpiMode, refreshToken, onOpenLine, section = 'warnings', onSectionChange, strategicFocus, onNavigate }) {
+export default function Operations({ ref, kpiMode, refreshToken, onOpenLine, section = 'warnings', onSectionChange, strategicFocus, onNavigate, onOpenGroup }) {
   return <main className="operations-page">
     <SubTabs label="运营中心" items={sections} active={section} onChange={(key) => onSectionChange?.(key)} />
-    {section === 'kpi' && <KpiAchievement ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} />}
-    {section === 'strategic' && <StrategicCustomers ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} onOpenLine={onOpenLine} focus={strategicFocus} />}
+    {section === 'kpi' && <KpiAchievement ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} onOpenGroup={onOpenGroup} />}
+    {section === 'strategic' && <StrategicCustomers ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} onOpenLine={onOpenLine} focus={strategicFocus} onOpenGroup={onOpenGroup} />}
     {section === 'overview' && <Workbench ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} onNavigate={onNavigate} />}
-    {section === 'warnings' && <ArrearsWarnings ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} onOpenLine={onOpenLine} />}
+    {section === 'warnings' && <ArrearsWarnings ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} onOpenLine={onOpenLine} onOpenGroup={onOpenGroup} />}
   </main>;
 }
 
-function ArrearsWarnings({ ref, kpiMode, refreshToken, onOpenLine }) {
+function ArrearsWarnings({ ref, kpiMode, refreshToken, onOpenLine, onOpenGroup }) {
   const [asOf, setAsOf] = useState(() => beijingDate());
   const [data, setData] = useState(null);
   const [keyword, setKeyword] = useState('');
@@ -130,7 +130,7 @@ function ArrearsWarnings({ ref, kpiMode, refreshToken, onOpenLine }) {
     {!loading && data?.invalidDates > 0 && <p className="operations-rule">{data.invalidDates} 条欠费停机记录的状态时间缺失、无效或晚于统计日期，未纳入预警。</p>}
     <div className="operations-table-wrap"><table className="warning-table"><thead><tr>{['集团', '产品编码', '集团产品编码 / 账户', '客户经理', '停机时长', '预警等级', '总欠费', '标注', '操作'].map((title) => <th key={title} className={title === '总欠费' ? 'num' : title === '操作' ? 'operations-actions-cell' : undefined}>{title}</th>)}</tr></thead>
       <tbody>{!loading && rows.map((row) => <tr key={row.id} className={row.mark === 'ignore' ? 'operations-ignored' : ''}>
-        <td className="operations-group-cell"><button className="operations-link" onClick={() => onOpenLine(row.id)}>{row.group_name || '查看专线'}</button><small>{row.group_code || '—'}</small></td>
+        <td className="operations-group-cell"><button className="operations-link" onClick={() => onOpenLine(row.id)}>{row.group_name || '查看专线'}</button><small>{row.group_code && onOpenGroup ? <button type="button" className="group-link" title="查看集团档案" onClick={() => onOpenGroup(row.group_code)}>{row.group_code} · 集团档案</button> : row.group_code || '—'}</small></td>
         <td>{row.product_code || '—'}</td><td className="operations-stack-cell">{row.group_product_code || '—'}<small>{row.group_product_account_id || '—'}</small></td><td>{row.manager_name || '—'}</td>
         <td className="operations-stack-cell"><span className={`operations-duration operations-level-${row.warning_level}`}>{row.stopped_days} 天</span><small>{row.status_time ? `${row.status_time.slice(0, 10)} 停机` : '停机时间 —'}</small></td><td><span className={`operations-risk operations-level-${row.warning_level}`} title={levels[row.warning_level]}>{levelShort[row.warning_level]}</span></td><td className="num">{money(row.total_arrears)}</td><td>{labels[row.mark]}</td>
         <td className="operations-actions-cell"><div className="operations-row-actions"><button title="发送欠费预警报告" aria-pressed={row.mark === 'remind'} disabled={saving !== null} onClick={() => { setNotice(''); setMailRow(row); }}><Bell size={15} />提醒</button><button title="忽略此条预警" aria-pressed={row.mark === 'ignore'} disabled={saving !== null} onClick={() => saveMark(row, 'ignore')}><BellOff size={15} />忽略</button>{row.mark !== 'unmarked' && <button disabled={saving !== null} onClick={() => saveMark(row, 'unmarked')}>重置</button>}</div></td>

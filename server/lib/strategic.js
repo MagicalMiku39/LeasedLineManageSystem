@@ -3,6 +3,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import XLSX from './xlsx.js';
 import { billableStatuses, cancelledStatuses } from './ledger-rules.js';
+import { ensureGroupDirectory, strategicCustomerSource } from './groups.js';
 
 const maxUploadMb = 32;
 const previewMinutes = 15;
@@ -151,6 +152,10 @@ export function createStrategicRouter({ db, leasedLineSource, currentUser, norma
   );
   `);
 
+  ensureGroupDirectory(db);
+  // Until a strategic list is imported, the groups the full group list marks as 战客 stand in.
+  const customers = () => strategicCustomerSource(db);
+
   const inService = billableStatuses;
   const status = "COALESCE(l.product_status_name, l.ledger_status, '')";
   const monthlyFee = 'CASE WHEN COALESCE(l.actual_monthly_fee, 0) > 0 THEN l.actual_monthly_fee ELSE COALESCE(l.package_fee, 0) END';
@@ -167,11 +172,12 @@ export function createStrategicRouter({ db, leasedLineSource, currentUser, norma
   }
 
   function groupRows(source) {
+    const list = customers().sql;
     return db.prepare(
       `WITH lines AS (
          SELECT l.group_code, l.group_name, ${status} AS status, ${monthlyFee} AS fee, l.start_time, l.status_time
          FROM ${source} l
-         WHERE l.group_code IN (SELECT group_code FROM strategic_customer)
+         WHERE l.group_code IN (SELECT group_code FROM ${list})
        ),
        totals AS (
          SELECT group_code,
@@ -187,7 +193,7 @@ export function createStrategicRouter({ db, leasedLineSource, currentUser, norma
               NULLIF(s.manager_name, '') AS managerName,
               COALESCE(t.activeLines, 0) AS activeLines, COALESCE(t.cancelledLines, 0) AS cancelledLines,
               COALESCE(t.activeMonthlyFee, 0) AS activeMonthlyFee, t.lastCancelledAt, t.firstStartAt
-       FROM strategic_customer s
+       FROM ${list} s
        LEFT JOIN totals t ON t.group_code = s.group_code`
     ).all(...inService, ...cancelledStatuses, ...inService, ...cancelledStatuses, ...inService)
       .map((row) => ({ ...row, status: classify(row) }));
@@ -200,13 +206,14 @@ export function createStrategicRouter({ db, leasedLineSource, currentUser, norma
    */
   router.importChanges = (batchId, query) => {
     const source = leasedLineSource(query);
-    const listed = db.prepare('SELECT COUNT(*) AS count FROM strategic_customer').get().count > 0;
+    const list = customers().sql;
+    const listed = db.prepare(`SELECT COUNT(*) AS count FROM ${list}`).get().count > 0;
     if (!listed) return { listed, changes: [] };
     const lines = db.prepare(
       `SELECT l.id, l.group_code, l.group_product_code, l.product_name, c.change_type, c.old_value, ${status} AS status_now
        FROM ledger_change c
        JOIN ${source} l ON l.id = c.line_id
-       WHERE c.batch_id = ? AND l.group_code IN (SELECT group_code FROM strategic_customer)
+       WHERE c.batch_id = ? AND l.group_code IN (SELECT group_code FROM ${list})
          AND (c.change_type = 'added' OR c.field_name = 'product_status_name')
        ORDER BY c.id`
     ).all(batchId);
@@ -240,8 +247,11 @@ export function createStrategicRouter({ db, leasedLineSource, currentUser, norma
     const groups = groupRows(leasedLineSource(req.query));
     const count = (key) => groups.filter((row) => row.status === key).length;
     const total = groups.length;
+    const from = customers().from;
     res.json({
-      list: lastImport(),
+      list: from === 'strategic' ? lastImport() : null,
+      // 'directory' while no strategic list has been imported: the full group list's 战客 groups.
+      from,
       summary: {
         total,
         penetrated: count('penetrated'),
@@ -257,7 +267,7 @@ export function createStrategicRouter({ db, leasedLineSource, currentUser, norma
 
   router.get('/groups/:code', (req, res) => {
     const code = String(req.params.code);
-    const customer = db.prepare('SELECT group_code, group_name, manager_name FROM strategic_customer WHERE group_code = ?').get(code);
+    const customer = db.prepare(`SELECT group_code, group_name, manager_name FROM ${customers().sql} WHERE group_code = ?`).get(code);
     if (!customer) return res.status(404).json({ error: '这个集团不在战客清单中' });
     const lines = db.prepare(
       `SELECT l.id, l.group_product_code, l.group_user_name, l.product_name, ${status} AS status, l.bandwidth,

@@ -159,14 +159,14 @@ function ImportPanel({ onDone, onClose }) {
 // Sorting puts the highest rank first: lines in service, then cancelled, then the rest.
 const kindRanks = { active: 3, cancelled: 2, other: 1 };
 
-function GroupDetail({ data, onOpenLine }) {
+function GroupDetail({ data, onOpenLine, onOpenGroup }) {
   const { group, lines } = data;
   const rankedLines = useMemo(() => lines.map((line) => ({ ...line, kindRank: kindRanks[line.kind] })), [lines]);
   return (
     <>
       <div className="rev-group-heading">
         <div>
-          <span className="rev-eyebrow">{group.groupCode}</span>
+          <span className="rev-eyebrow">{onOpenGroup ? <button type="button" className="group-link" title="查看集团档案" onClick={() => onOpenGroup(group.groupCode)}>{group.groupCode} · 集团档案</button> : group.groupCode}</span>
           <h2>{group.groupName || '未填写集团名称'}</h2>
           <p>{group.managerName || '客户经理未知'}</p>
         </div>
@@ -201,7 +201,7 @@ function GroupDetail({ data, onOpenLine }) {
  * (已渗透), had them and lost them all (已流失), or never had any (未渗透); by group, or as a
  * penetration report per manager.
  */
-export default function StrategicCustomers({ ref, kpiMode, refreshToken, onOpenLine, focus }) {
+export default function StrategicCustomers({ ref, kpiMode, refreshToken, onOpenLine, focus, onOpenGroup }) {
   const [revision, setRevision] = useState(0);
   const [view, setView] = useState('groups');
   const [manager, setManager] = useState(null);
@@ -280,6 +280,8 @@ export default function StrategicCustomers({ ref, kpiMode, refreshToken, onOpenL
   }), [group, detail.data, rows, managers, totals, showingManagers, manager, status]);
 
   const list = overview.data?.list;
+  // No strategic list yet: the groups the full group list marks as 战客 stand in.
+  const standIn = overview.data?.from === 'directory' && overview.data.summary.total > 0;
   const failure = group ? detail.error : overview.error;
   const loading = group ? detail.loading : overview.loading;
 
@@ -293,7 +295,7 @@ export default function StrategicCustomers({ ref, kpiMode, refreshToken, onOpenL
         </div>
       </div>
       <div className="rev-context">
-        <span>{list ? `战客清单：${list.file_name || '未命名'} · ${list.row_count} 个集团 · ${beijingTime(list.imported_at)} 导入` : '还没有导入战客清单'}</span>
+        <span>{list ? `战客清单：${list.file_name || '未命名'} · ${list.row_count} 个集团 · ${beijingTime(list.imported_at)} 导入` : standIn ? `尚未单独导入战客清单，当前使用全量集团清单中标识为“战客”的 ${overview.data.summary.total} 个集团；导入战客清单后以战客清单为准` : '还没有导入战客清单'}</span>
         <span>台账范围：{kpiMode ? 'KPI 十类产品' : '全部产品'} · 在网 = 正常在用、停机执行中、停机</span>
       </div>
       {message && <div className="rev-success" role="status">{message}<button title="关闭提示" aria-label="关闭提示" onClick={() => setMessage('')}><X size={14} /></button></div>}
@@ -312,11 +314,11 @@ export default function StrategicCustomers({ ref, kpiMode, refreshToken, onOpenL
       )}
       {failure && <Notice error>{failure}<button onClick={refresh}><RefreshCw size={14} />重试</button></Notice>}
 
-      {loading && !overview.data ? <Loader /> : group ? (detail.data ? <GroupDetail data={detail.data} onOpenLine={onOpenLine} /> : detail.loading ? <Loader /> : null) : !list ? (
+      {loading && !overview.data ? <Loader /> : group ? (detail.data ? <GroupDetail data={detail.data} onOpenLine={onOpenLine} onOpenGroup={onOpenGroup} /> : detail.loading ? <Loader /> : null) : !list && !standIn ? (
         <section className="rev-empty">
           <FileSpreadsheet size={42} strokeWidth={1.3} />
           <h2>还没有战客清单</h2>
-          <p>下载模板，填写集团编码、集团名称、客户经理后，点击顶部“导入 Excel”导入。</p>
+          <p>下载模板，填写集团编码、集团名称、客户经理后，点击顶部“导入 Excel”导入。也可以先在“集团”页导入全量集团清单，系统会使用其中标识为“战客”的集团。</p>
           <button onClick={downloadTemplate}><Download size={16} />下载模板</button>
         </section>
       ) : overview.data && (

@@ -822,7 +822,7 @@ test('a rollback puts one kind of data back, backs up first, and can itself be u
   assert.deepEqual([preview.linesAdded, preview.linesChanged, preview.linesRemoved, preview.manualEdits, preview.forecastsChanged], [1, 1, 0, 1, 1]);
   const lineRow = preview.tables.find((row) => row.table === 'leased_line');
   assert.equal(lineRow.current, lineRow.backup + 1);
-  await assert.rejects(backups.preview(backup.name, 'everything'), /台账类数据还是战客清单/);
+  await assert.rejects(backups.preview(backup.name, 'everything'), /请选择要回退的数据范围/);
   await assert.rejects(backups.restore('ledger-20260101T000000Z-manual-000000.db.gz', 'ledger'), /找不到/);
 
   const status = (code) => db.prepare('SELECT product_status_name AS s FROM leased_line WHERE group_product_code = ?').get(code)?.s ?? null;
@@ -1367,6 +1367,129 @@ test('warning mail recipient mapping, preview validation, duplicate control and 
   const retry = await (await preview()).json();
   assert.equal((await send(retry.id)).status, 409);
   db.prepare("DELETE FROM leased_line WHERE group_product_code LIKE 'MAIL-%'").run();
+});
+
+test('full group list: import, ledger-first managers, key categories, profile and the strategic fallback', async () => {
+  const insert = db.prepare(`INSERT INTO leased_line
+    (group_code, group_name, group_product_code, product_name, product_status_name, ledger_status, manager_name, start_time, status_time, package_fee, total_arrears, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const line = (group, code, status, manager, arrears = 0, statusTime = null) =>
+    insert.run(group, `台账${group}`, code, '互联网专线', status, status, manager, '2025-03-01', statusTime, 100, arrears, nowIso());
+  line('GD001', 'GDL1', '正常在用', '台账经理');
+  line('GD001', 'GDL2', '正常在用', '台账经理');
+  line('GD001', 'GDL3', '停机', '另一位', 300, '2026-01-01');
+  line('GD002', 'GDL4', '正式销户', '李四', 0, '2026-02-01');
+  line('GD009', 'GDL5', '正常在用', '赵六');
+
+  const header = ['集团编码', '集团名称', '集团级别', '集团客户经理标识', '集团客户经理名称', '微网格名称', '入网时间', '成员到达数', '企业员工数', '移动成员数', '成员出账金额', '商客战客集团标识', '数据月份'];
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([header,
+    ['GD001', '清单一', 'A', 'd1', '清单经理', '某微网格', '2004-01-01 00:00:00', '112', '100', '', '12832.72', '战客', '202605']
+  ]), '要客清单2');
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([header,
+    ['GD001', '清单一', 'A', 'd1', '清单经理', '某微网格', '2004-01-01 00:00:00', '112', '100', '', '12832.72', '战客', '202605'],
+    ['GD002', '清单二', 'B', 'd2', '李四', '', '2010-05-01 00:00:00', '3', '', '', '', '商客', '202605'],
+    ['GD003', '清单三', 'C', 'd3', '王五', '某微网格', '2012-05-01 00:00:00', '9', '20', '9', '59.1', '战客', '202605'],
+    ['0GD04', '清单四', 'D', 'd4', '王五', '', '2015-05-01 00:00:00', '1', '', '', '', '商客', '202605'],
+    ['GD005', '没有经理', 'D', '', '', '', '', '', '', '', '', '商客', '202605'],
+    ['GD001', '重复', 'A', 'd1', '清单经理', '', '', '', '', '', '', '战客', '202605']
+  ]), '全量集团');
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([
+    ['集团名称', '集团ID', '客户类别', '客户经理工号', '客户经理姓名'],
+    ['清单三', 'GD003', '要客', 'd3', '王五'],
+    ['不在清单', 'GDX99', '139要客', 'd9', '某人']
+  ]), '要客清单1');
+  const upload = async (bytes, name = 'groups.xlsx') => {
+    const form = new FormData();
+    form.append('file', new Blob([bytes]), name);
+    return request('/api/groups/preview', { method: 'POST', body: form });
+  };
+
+  assert.equal((await request('/api/groups', {}, false)).status, 401);
+  const bad = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(bad, XLSX.utils.aoa_to_sheet([['集团编码', '集团名称'], ['GD001', '清单一']]), 'S');
+  const refused = await upload(XLSX.write(bad, { type: 'buffer', bookType: 'xlsx' }));
+  assert.equal(refused.status, 400);
+  assert.match((await refused.json()).error, /缺少“集团客户经理名称”列/);
+
+  const preview = await (await upload(XLSX.write(book, { type: 'buffer', bookType: 'xlsx' }))).json();
+  assert.deepEqual(
+    [preview.sheetName, preview.rowCount, preview.incomplete, preview.duplicates, preview.keyMatched, preview.keyUnmatched, preview.dataMonth],
+    ['全量集团', 4, 1, 1, 1, 1, '202605']
+  );
+  assert.deepEqual(preview.keySheets, ['要客清单1']);
+  assert.deepEqual(preview.ignoredSheets, ['要客清单2']);
+  assert.deepEqual([preview.added, preview.removed, preview.replacing, preview.inLedger, preview.ledgerMismatch, preview.strategic], [4, 0, false, 2, 1, 2]);
+  assert.equal(preview.ledgerUnlisted >= 1, true);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM group_directory').get().count, 0, 'a preview changes nothing');
+
+  const committed = await request('/api/groups/commit', { method: 'POST', body: { token: preview.token } });
+  assert.equal(committed.status, 200);
+  const done = await committed.json();
+  assert.match(done.backup, /group-import/);
+  assert.equal((await request('/api/groups/commit', { method: 'POST', body: { token: preview.token } })).status, 409);
+
+  const list = async (query) => (await request(`/api/groups?kpiMode=0&${query}`)).json();
+  const all = await list('search=GD0');
+  const byCode = Object.fromEntries(all.rows.map((row) => [row.groupCode, row]));
+  // The ledger's manager wins, by most lines; the list's stays visible and the difference is flagged.
+  assert.deepEqual(
+    [byCode.GD001.managerName, byCode.GD001.directoryManager, byCode.GD001.managerMismatch, byCode.GD001.activeLines, byCode.GD001.groupName],
+    ['台账经理', '清单经理', true, 3, '台账GD001']
+  );
+  assert.deepEqual([byCode.GD002.managerMismatch, byCode.GD002.activeLines, byCode.GD002.cancelledLines], [false, 0, 1]);
+  assert.deepEqual([byCode.GD003.managerName, byCode.GD003.inLedger, byCode.GD003.keyCategory, byCode.GD003.groupName], ['王五', false, '要客', '清单三']);
+  assert.equal(byCode['0GD04'].listed, true, 'leading zeros stay');
+  assert.deepEqual([byCode.GD009.listed, byCode.GD009.managerName], [false, '赵六']);
+  assert.equal(all.rows[0].groupCode, 'GD001', 'groups with lines in service come first');
+  assert.equal(all.list.row_count, 4);
+  assert.deepEqual((await list('search=GD0&lines=none')).rows.map((row) => row.groupCode).sort(), ['0GD04', 'GD003']);
+  assert.deepEqual((await list('search=GD0&lines=inactive')).rows.map((row) => row.groupCode), ['GD002']);
+  assert.deepEqual((await list('search=GD0&mark=mismatch')).rows.map((row) => row.groupCode), ['GD001']);
+  assert.deepEqual((await list('search=GD0&mark=unlisted')).rows.map((row) => row.groupCode), ['GD009']);
+  assert.deepEqual((await list('search=GD0&mark=key')).rows.map((row) => row.groupCode), ['GD003']);
+  assert.deepEqual((await list('search=GD0&level=B')).rows.map((row) => row.groupCode), ['GD002']);
+  assert.equal((await list('search=王五')).total, 2);
+  assert.equal((await request('/api/groups/export?kpiMode=0&search=GD0')).status, 200);
+
+  const profile = await (await request('/api/groups/GD001?kpiMode=0')).json();
+  assert.deepEqual([profile.group.managerName, profile.group.level, profile.group.segment, profile.lines.length, profile.group.totalArrears], ['台账经理', 'A', '战客', 3, 300]);
+  assert.deepEqual([profile.warnings.length, profile.warnings[0].group_product_code], [1, 'GDL3']);
+  assert.deepEqual(profile.statuses.find((item) => item.name === '正常在用'), { name: '正常在用', count: 2 });
+  assert.equal(profile.group.more.memberCount, 112);
+  const empty = await (await request('/api/groups/GD003?kpiMode=0')).json();
+  assert.deepEqual([empty.lines.length, empty.group.inLedger, empty.group.keyCategory], [0, false, '要客']);
+  assert.equal((await request('/api/groups/NOPE')).status, 404);
+
+  // With no strategic list imported, the full list's 战客 groups stand in for it.
+  const kept = db.prepare('SELECT * FROM strategic_customer').all();
+  db.exec('DELETE FROM strategic_customer');
+  const fallback = await (await request('/api/strategic?kpiMode=0')).json();
+  assert.deepEqual([fallback.from, fallback.list, fallback.summary.total], ['directory', null, 2]);
+  const standIn = Object.fromEntries(fallback.groups.map((row) => [row.groupCode, row]));
+  assert.deepEqual([standIn.GD001.status, standIn.GD001.managerName, standIn.GD003.status, standIn.GD003.managerName], ['penetrated', '台账经理', 'untouched', '王五']);
+  assert.equal((await (await request('/api/groups/GD003?kpiMode=0')).json()).group.strategicStatus, 'untouched');
+  assert.equal((await request('/api/strategic/groups/GD001?kpiMode=0')).status, 200);
+  const restoreRow = db.prepare('INSERT INTO strategic_customer (group_code, group_name, manager_name, import_id) VALUES (?, ?, ?, ?)');
+  for (const row of kept) restoreRow.run(row.group_code, row.group_name, row.manager_name, row.import_id);
+  if (kept.length) {
+    assert.equal((await (await request('/api/strategic?kpiMode=0')).json()).from, 'strategic');
+    assert.equal((await (await request('/api/groups/GD001?kpiMode=0')).json()).group.strategic, false, 'an imported strategic list decides');
+  }
+
+  // Every import replaces the whole list.
+  const next = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(next, XLSX.utils.aoa_to_sheet([['集团编码', '集团名称', '集团客户经理名称'], ['GD002', '清单二', '新经理']]), '全量集团');
+  const second = await (await upload(XLSX.write(next, { type: 'buffer', bookType: 'xlsx' }))).json();
+  assert.deepEqual([second.added, second.removed, second.managerChanged, second.replacing], [0, 3, 1, true]);
+  assert.equal((await request('/api/groups/commit', { method: 'POST', body: { token: second.token } })).status, 200);
+  assert.equal((await request('/api/groups/GD003')).status, 404);
+  assert.equal((await (await request('/api/groups/GD001?kpiMode=0')).json()).group.listed, false);
+
+  const scopes = (await (await request('/api/settings/backups')).json()).scopes.map((item) => item.key);
+  assert.equal(scopes.includes('groups'), true);
+
+  db.exec("DELETE FROM leased_line WHERE group_product_code LIKE 'GDL%'; DELETE FROM group_directory; DELETE FROM group_directory_import;");
 });
 
 test('logout invalidates the session cookie', async () => {

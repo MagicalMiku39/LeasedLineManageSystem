@@ -419,6 +419,13 @@ td,
   font-weight: 600;
 }
 
+/* On a small laptop the five menus drop their icons so the top bar stays on one row. */
+@media (min-width: 761px) and (max-width: 1340px) {
+  .view-tabs button svg {
+    display: none;
+  }
+}
+
 /* The second-level switch under a top menu: 运营中心's sections, 台账 / 导入记录. */
 .sub-tabs {
   display: flex;

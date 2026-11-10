@@ -114,7 +114,7 @@ function ImportHistory({ lineId }) {
   );
 }
 
-export default function DetailDrawer({ record, onClose, onSaved }) {
+export default function DetailDrawer({ record, onClose, onSaved, onOpenGroup }) {
   const [form, setForm] = useState(record || {});
   const [logs, setLogs] = useState([]);
   const [logsState, setLogsState] = useState({ loading: false, error: '', revision: 0 });
@@ -190,7 +190,12 @@ export default function DetailDrawer({ record, onClose, onSaved }) {
     <aside className="drawer" aria-label="专线详情">
       <div className="drawer-header">
         <div>
-          <p>{record.group_code || '未填写集团编码'} · {record.group_product_code || '未填写集团产品编码'}</p>
+          <p>
+            {record.group_code && onOpenGroup
+              ? <button type="button" className="group-link" title="查看集团档案" disabled={saving} onClick={() => onOpenGroup(record.group_code)}>{record.group_code} · 集团档案</button>
+              : record.group_code || '未填写集团编码'}
+            {' · '}{record.group_product_code || '未填写集团产品编码'}
+          </p>
           <h2>{record.group_user_name || record.product_name || '专线详情'}</h2>
         </div>
         <button ref={closeButton} className="icon-button" onClick={onClose} title="关闭" aria-label="关闭详情" disabled={saving}>
