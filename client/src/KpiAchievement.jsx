@@ -235,15 +235,13 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken }) {
         <th>类别</th>
         <th>月份</th>
         <th>把握度</th>
-        <th>集团编码</th>
-        <th>集团名称</th>
+        <th>集团</th>
         <th>客户经理</th>
         <th>类型</th>
         <th className="num">条数</th>
         <th className="num">已落地</th>
         <th>最新进展</th>
-        <th>更新时间</th>
-        <th>操作</th>
+        <th className="kpi-actions-cell">操作</th>
       </tr>
     </thead>
   );
@@ -295,15 +293,20 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken }) {
           {confidenceOrder.map((level) => <option key={level} value={level}>{confidenceName(row.kind, level)}</option>)}
         </select>
       </td>
-      <td>{row.group_code}</td>
-      <td>{row.group_name}{row.suggestions > 0 && <span className="status-pill kpi-suggestion-pill">可能已{row.kind === 'cancelled' ? '销户' : '落地'} {row.suggestions}</span>}</td>
+      <td className="kpi-wrap kpi-group-cell">
+        <strong>{row.group_name}</strong>
+        <small>{row.group_code}</small>
+        {row.suggestions > 0 && <span className="status-pill kpi-suggestion-pill">可能已{row.kind === 'cancelled' ? '销户' : '落地'} {row.suggestions}</span>}
+      </td>
       <td>{row.manager_name}</td>
-      <td>{row.product_type}</td>
+      <td className="kpi-wrap kpi-type-cell">{row.product_type}</td>
       <td className="num">{row.line_count}</td>
       <td className="num">{row.landed_count}</td>
-      <td className="kpi-latest-note" title={row.latest_note || undefined}>{row.latest_note || '—'}</td>
-      <td>{row.latest_at ? beijingTime(row.latest_at) : '—'}</td>
-      <td onClick={(event) => event.stopPropagation()}>
+      <td className="kpi-wrap kpi-note-cell" title={row.latest_note || undefined}>
+        <span className="kpi-note-text">{row.latest_note || '—'}</span>
+        {row.latest_at && <small>{beijingTime(row.latest_at)}</small>}
+      </td>
+      <td className="kpi-actions-cell" onClick={(event) => event.stopPropagation()}>
         <div className="kpi-row-actions">
           <button
             type="button"
@@ -619,7 +622,7 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken }) {
               {!loading && forecasts.map(forecastRow)}
               {(loading || forecasts.length === 0) && (
                 <tr className="state-row">
-                  <td colSpan="12" className="empty">{loading ? '正在加载…' : '暂无预计新增或销户，可在上方填写'}</td>
+                  <td colSpan="10" className="empty">{loading ? '正在加载…' : '暂无预计新增或销户，可在上方填写'}</td>
                 </tr>
               )}
             </tbody>

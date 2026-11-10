@@ -115,7 +115,18 @@
   .strategic-page .rev-import-file > div { flex-basis: 100%; }
   .strategic-page .rev-import-file > button { margin-bottom: 10px; }
 }
-.kpi-latest-note { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+/* The forecast list keeps to the panel's width: long names, types and notes wrap instead of
+   widening the table, and the actions stay pinned at the right edge. */
+.kpi-table td.kpi-wrap { white-space: normal; overflow-wrap: anywhere; }
+.kpi-group-cell { min-width: 120px; max-width: 220px; }
+.kpi-group-cell strong { display: block; font-weight: 500; }
+.kpi-group-cell small, .kpi-note-cell small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+.kpi-group-cell .kpi-suggestion-pill { margin: 4px 0 0; }
+.kpi-type-cell { min-width: 72px; max-width: 110px; }
+.kpi-note-cell { min-width: 140px; max-width: 260px; }
+.kpi-note-text { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+.kpi-table .kpi-actions-cell { position: sticky; right: 0; z-index: 1; background: var(--surface); border-left: 1px solid var(--rule); }
+.kpi-table thead .kpi-actions-cell { z-index: 2; }
 .kpi-progress-dialog { width: min(560px, 100%); }
 .kpi-progress-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--line); }
 .kpi-progress-head h3 { margin: 0; font-size: 17px; overflow-wrap: anywhere; }
