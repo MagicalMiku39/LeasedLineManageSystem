@@ -35,6 +35,7 @@ import { createClientCertRouter } from './lib/client-cert-router.js';
 import { logSecurityEvent, securityLogHandler } from './lib/security-log.js';
 import {
   authStatus,
+  changePassword,
   currentUser,
   loginAuth,
   logoutAuth,
@@ -108,6 +109,14 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 app.use('/api', requireAuth);
+
+app.post('/api/auth/password', (req, res) => {
+  try {
+    res.json(changePassword(req, req.body || {}, requestSource(req)));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
 
 export function numberOrNull(value) {
   if (value === undefined || value === null || value === '') return null;

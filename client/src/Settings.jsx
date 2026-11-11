@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Copy, DatabaseBackup, Download, FilePlus2, History, KeyRound, ScrollText, ShieldCheck, ShieldOff } from 'lucide-react';
+import { Copy, DatabaseBackup, Download, FilePlus2, History, KeyRound, ScrollText, ShieldCheck, ShieldOff, UserRound } from 'lucide-react';
 import { apiBase, isAbort, jsonBody, requestJson } from './api.js';
 import { InlineError } from './components/Feedback.jsx';
 import { describeSource, isAlertEvent, securityEventLabels, securityLogCategories } from './securityLog.js';
@@ -11,9 +11,10 @@ const categoryStorageKey = 'ledger-settings-category';
 
 // The settings page's left-hand menu; each entry shows only its own sections.
 const settingsCategories = [
+  { key: 'account', label: '账号与密码', icon: UserRound, description: '修改登录密码。需要当前密码和 Google Authenticator 验证码；修改后其他设备上的登录会退出。' },
   { key: 'access', label: '访问控制', icon: KeyRound, description: '设备证书：让 IP 不固定的手机安全访问系统，不用逐个开放 IP 白名单。' },
   { key: 'backup', label: '备份与恢复', icon: DatabaseBackup, description: '导入前和每周自动备份整个数据库；导错文件时回退台账类数据、战客清单或全量集团清单，回退也可以撤销。' },
-  { key: 'log', label: '安全日志', icon: ScrollText, description: '登录、设置页验证码、证书和端口、备份下载与回退的操作记录。' }
+  { key: 'log', label: '安全日志', icon: ScrollText, description: '登录、修改密码、设置页验证码、证书和端口、备份下载与回退的操作记录。' }
 ];
 
 function savedCategory() {
@@ -448,6 +449,68 @@ function CodeDialog({ action, onClose }) {
   );
 }
 
+const emptyPassword = { current: '', next: '', confirm: '', code: '' };
+
+// The signed-in account's password. The current password and the authenticator code are both
+// asked for; other devices signed in to the account are signed out, this one stays.
+function PasswordForm({ username }) {
+  const [form, setForm] = useState(emptyPassword);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState('');
+  const set = (key) => (event) => { setForm({ ...form, [key]: event.target.value }); setDone(''); };
+
+  async function submit(event) {
+    event.preventDefault();
+    setError('');
+    setDone('');
+    if (form.next.length < 8) return setError('新密码至少需要 8 个字符');
+    if (form.next !== form.confirm) return setError('两次输入的新密码不一致');
+    if (form.next === form.current) return setError('新密码不能与当前密码相同');
+    setBusy(true);
+    try {
+      const result = await requestJson('/auth/password', jsonBody('POST', { currentPassword: form.current, newPassword: form.next, code: form.code }));
+      setForm(emptyPassword);
+      setDone(result.signedOut ? `密码已修改，其他 ${result.signedOut} 个设备上的登录已退出，需要用新密码重新登录。` : '密码已修改。');
+    } catch (failure) {
+      setError(failure.message);
+      setForm((current) => ({ ...current, code: '' }));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="settings-password">
+      <input type="text" name="username" autoComplete="username" value={username || ''} readOnly hidden />
+      <p className="subtle settings-first">当前账号：{username || '—'}</p>
+      <div className="settings-fields">
+        <label>
+          当前密码
+          <input type="password" required autoComplete="current-password" disabled={busy} value={form.current} onChange={set('current')} />
+        </label>
+        <label>
+          Google Authenticator 验证码
+          <input required inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="\d{6}" disabled={busy} value={form.code} onChange={set('code')} />
+        </label>
+        <label>
+          新密码
+          <input type="password" required minLength={8} maxLength={128} autoComplete="new-password" disabled={busy} value={form.next} onChange={set('next')} />
+        </label>
+        <label>
+          再次输入新密码
+          <input type="password" required minLength={8} maxLength={128} autoComplete="new-password" disabled={busy} value={form.confirm} onChange={set('confirm')} />
+        </label>
+      </div>
+      <InlineError message={error} />
+      <div className="settings-actions">
+        {done && <span className="subtle" role="status">{done}</span>}
+        <button type="submit" className="primary" disabled={busy}><KeyRound size={16} /> {busy ? '正在修改…' : '修改密码'}</button>
+      </div>
+    </form>
+  );
+}
+
 // Shown once: neither the file nor the password is kept on the server.
 function IssuedDialog({ issued, onClose }) {
   const [downloaded, setDownloaded] = useState(false);
@@ -491,7 +554,7 @@ function IssuedDialog({ issued, onClose }) {
   );
 }
 
-export default function Settings({ refreshToken, onDataRestored = () => {} }) {
+export default function Settings({ refreshToken, username, onDataRestored = () => {} }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -636,6 +699,19 @@ export default function Settings({ refreshToken, onDataRestored = () => {} }) {
           </div>
 
           <InlineError message={error} onRetry={reload} />
+          {category === 'account' && (
+            <Section
+              title="修改密码"
+              description={(
+                <>
+                  <p>新密码至少 8 个字符。登录时仍然需要 Google Authenticator 验证码，验证码不变。</p>
+                  <p>连续输错 5 次会锁定 15 分钟，与登录共用次数。</p>
+                </>
+              )}
+            >
+              <PasswordForm username={username} />
+            </Section>
+          )}
           {readOnly && category === 'access' && <InlineError message="当前通过设备证书端口访问，只能查看。管理证书请从公司网络打开系统。" />}
           {loading && !data && <p className="subtle" role="status">正在读取设置…</p>}
 

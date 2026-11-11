@@ -1492,6 +1492,45 @@ test('full group list: import, ledger-first managers, key categories, profile an
   db.exec("DELETE FROM leased_line WHERE group_product_code LIKE 'GDL%'; DELETE FROM group_directory; DELETE FROM group_directory_import;");
 });
 
+test('changing the password needs the current one and a code, and signs out the other sessions', async () => {
+  const secret = db.prepare('SELECT totp_secret FROM auth_user WHERE username = ?').get('admin').totp_secret;
+  const change = (body, cookie = sessionCookie) => fetch(`${baseUrl}/api/auth/password`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie }, body: JSON.stringify(body)
+  });
+  const other = auth.loginAuth({ username: 'admin', password: 'password1', code: totp(secret) }, 'ip:10.9.9.9').cookie.split(';')[0];
+  const otherWorks = async () => (await fetch(`${baseUrl}/api/health`, { headers: { Cookie: other } })).status;
+  assert.equal(await otherWorks(), 200);
+
+  assert.equal((await fetch(`${baseUrl}/api/auth/password`, { method: 'POST' })).status, 401);
+  const short = await change({ currentPassword: 'password1', newPassword: 'short', code: totp(secret) });
+  assert.equal(short.status, 400);
+  assert.match((await short.json()).error, /至少需要 8 个字符/);
+  const wrong = await change({ currentPassword: 'not-it-at-all', newPassword: 'password2', code: totp(secret) });
+  assert.equal(wrong.status, 400);
+  assert.match((await wrong.json()).error, /当前密码或验证码错误/);
+  assert.equal((await change({ currentPassword: 'password1', newPassword: 'password2', code: '000000' })).status, 400);
+  const same = await change({ currentPassword: 'password1', newPassword: 'password1', code: totp(secret) });
+  assert.match((await same.json()).error, /不能与当前密码相同/);
+  assert.equal(await otherWorks(), 200, 'failed attempts end nothing');
+
+  const done = await change({ currentPassword: 'password1', newPassword: 'password2', code: totp(secret) });
+  assert.equal(done.status, 200);
+  assert.equal((await done.json()).signedOut >= 1, true);
+  assert.equal(await otherWorks(), 401, 'other sessions end');
+  assert.equal((await request('/api/health')).status, 200, 'the session making the change stays');
+  assert.throws(() => auth.loginAuth({ username: 'admin', password: 'password1', code: totp(secret) }, 'ip:10.9.9.8'), /账号、密码或验证码错误/);
+  assert.equal(Boolean(auth.loginAuth({ username: 'admin', password: 'password2', code: totp(secret) }, 'ip:10.9.9.8').cookie), true);
+
+  const events = db.prepare("SELECT event FROM security_log WHERE event LIKE 'password_%' ORDER BY id").all().map((row) => row.event);
+  assert.deepEqual(events.slice(-3), ['password_change_failed', 'password_change_failed', 'password_changed']);
+  const logged = await (await request('/api/settings/security-log?category=account')).json();
+  assert.equal(JSON.stringify(logged).includes('password2'), false, 'the log never holds a password');
+
+  // Put the test password back for the tests after this one.
+  assert.equal((await change({ currentPassword: 'password2', newPassword: 'password1', code: totp(secret) })).status, 200);
+  db.exec("DELETE FROM auth_attempt");
+});
+
 test('logout invalidates the session cookie', async () => {
   const response = await request('/api/auth/logout', { method: 'POST' });
   assert.equal(response.status, 200);

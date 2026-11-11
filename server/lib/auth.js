@@ -224,6 +224,47 @@ export function verifyUserCode(username, code, source = '') {
   return true;
 }
 
+/**
+ * Changes the signed-in user's password. Asks for the current password and the authenticator
+ * code, counted against the same lockout as a login. Every other session of the account ends;
+ * the one making the change stays signed in.
+ */
+export function changePassword(req, { currentPassword, newPassword, code } = {}, source = '') {
+  const session = currentUser(req);
+  if (!session) throw Object.assign(new Error('未登录'), { status: 401 });
+  const next = String(newPassword ?? '');
+  if (next.length < 8) throw Object.assign(new Error('新密码至少需要 8 个字符'), { status: 400 });
+  if (next.length > 128) throw Object.assign(new Error('新密码不能超过 128 个字符'), { status: 400 });
+  const key = attemptKey(session.username, source);
+  assertNotLocked(key);
+  const user = db.prepare('SELECT * FROM auth_user WHERE username = ?').get(session.username);
+  const { hash } = hashPassword(String(currentPassword ?? ''), user.password_salt);
+  if (!timingSafeEqualText(hash, user.password_hash) || !verifyTotp(user.totp_secret, code)) {
+    const locked = recordFailure(key);
+    logSecurityEvent('password_change_failed', { username: user.username, source });
+    if (locked) logSecurityEvent('login_locked', { username: user.username, source, detail: `连续错误 ${maxFailures} 次，锁定 ${lockMinutes} 分钟` });
+    throw Object.assign(new Error('当前密码或验证码错误'), { status: 400 });
+  }
+  if (timingSafeEqualText(hashPassword(next, user.password_salt).hash, user.password_hash)) {
+    throw Object.assign(new Error('新密码不能与当前密码相同'), { status: 400 });
+  }
+  clearFailures(key);
+  const fresh = hashPassword(next);
+  const keep = hashToken(getCookie(req, 'ledger_session'));
+  let ended = 0;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare('UPDATE auth_user SET password_hash = ?, password_salt = ?, updated_at = ? WHERE id = ?').run(fresh.hash, fresh.salt, nowIso(), user.id);
+    ended = Number(db.prepare('DELETE FROM auth_session WHERE user_id = ? AND token_hash <> ?').run(user.id, keep).changes);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+  logSecurityEvent('password_changed', { username: user.username, source, detail: ended ? `其他 ${ended} 个登录已退出` : '' });
+  return { signedOut: ended };
+}
+
 export function logoutAuth(req, res) {
   const token = getCookie(req, 'ledger_session');
   if (token) {

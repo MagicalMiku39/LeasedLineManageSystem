@@ -314,6 +314,7 @@ function App() {
         return (
           <Settings
             refreshToken={settingsRevision}
+            username={auth.user?.username}
             onDataRestored={() => {
               // Every page shows data the rollback may have changed.
               reloadLedgerPage();

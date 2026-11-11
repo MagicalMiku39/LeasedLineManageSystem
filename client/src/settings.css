@@ -192,6 +192,11 @@
   background: transparent;
 }
 
+.settings-password .settings-actions .subtle {
+  flex: 1 1 240px;
+  color: var(--green);
+}
+
 /* Free text such as an import file name wraps instead of widening the table. */
 .settings-table .settings-wrap-cell {
   min-width: 140px;
