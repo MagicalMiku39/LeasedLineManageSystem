@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { ensureGroupDirectory } from './groups.js';
 
 // Default annual target (net additions: added minus cancelled lines) until one is set for the year.
 export const annualNetTarget = 230;
@@ -101,6 +102,13 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
 
   function targetFor(year) {
     return db.prepare('SELECT net_target FROM kpi_target WHERE year = ?').get(year)?.net_target ?? annualNetTarget;
+  }
+
+  ensureGroupDirectory(db);
+
+  // A group with no lines yet, as the full group list has it.
+  function directoryGroup(groupCode) {
+    return db.prepare("SELECT group_code, COALESCE(group_name, '') AS group_name, COALESCE(manager_name, '') AS manager_name FROM group_directory WHERE group_code = ?").get(groupCode) || null;
   }
 
   // The group's name and manager as the ledger has them; with several, the one on most lines.
@@ -289,7 +297,8 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     res.json({ year, target });
   });
 
-  // Group lookup for the forecast form: code or name, one row per group code.
+  // Group lookup for the forecast form: code or name, one row per group code. Groups with lines
+  // come from the ledger; the full group list adds the ones that have none yet.
   router.get('/groups', (req, res) => {
     const keyword = String(req.query.q || '').trim();
     if (!keyword) return res.json([]);
@@ -307,9 +316,17 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     for (const row of rows) {
       if (seen.has(row.group_code)) continue;
       seen.add(row.group_code);
-      groups.push({ group_code: row.group_code, group_name: row.group_name, manager_name: row.manager_name });
+      groups.push({ group_code: row.group_code, group_name: row.group_name, manager_name: row.manager_name, source: 'ledger' });
       if (groups.length >= groupMatchLimit) break;
     }
+    const listed = db.prepare(
+      `SELECT group_code, COALESCE(group_name, '') AS group_name, COALESCE(manager_name, '') AS manager_name
+       FROM group_directory
+       WHERE (group_code LIKE ? OR group_name LIKE ?) AND group_code NOT IN (SELECT group_code FROM leased_line WHERE group_code IS NOT NULL)
+       ORDER BY CASE WHEN group_code = ? THEN 0 WHEN group_code LIKE ? THEN 1 ELSE 2 END, group_code ASC
+       LIMIT ?`
+    ).all(`%${keyword}%`, `%${keyword}%`, keyword, `${keyword}%`, groupMatchLimit);
+    for (const row of listed) groups.push({ ...row, source: 'directory' });
     res.json(groups);
   });
 
@@ -329,12 +346,13 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     if (!Number.isSafeInteger(lineCount) || lineCount <= 0) return res.status(400).json({ error: '预计条数须为正整数' });
     if (!confidenceLevels.includes(confidence)) return res.status(400).json({ error: '把握度不正确' });
 
-    // A group already in the ledger keeps its own name and manager; a new group is entered by hand.
-    const known = ledgerGroup(groupCode);
+    // A group in the ledger keeps the ledger's name and manager; one only on the full group list
+    // keeps the list's; any other group is entered by hand.
+    const known = ledgerGroup(groupCode) || directoryGroup(groupCode);
     const groupName = known ? known.group_name : String(body.group_name ?? '').trim();
     const managerName = known ? known.manager_name : String(body.manager_name ?? '').trim();
-    if (!groupName) return res.status(400).json({ error: '台账中没有该集团，请填写集团名称' });
-    if (!managerName) return res.status(400).json({ error: '台账中没有该集团，请填写客户经理' });
+    if (!groupName) return res.status(400).json({ error: '台账和全量集团清单中都没有该集团，请填写集团名称' });
+    if (!managerName) return res.status(400).json({ error: '台账和全量集团清单中都没有该集团，请填写客户经理' });
 
     const now = new Date().toISOString();
     const result = db.prepare(

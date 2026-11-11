@@ -195,8 +195,10 @@ export function ensureGroupDirectory(db) {
     imported_by TEXT,
     imported_at TEXT NOT NULL
   );
-  CREATE INDEX IF NOT EXISTS idx_leased_line_group ON leased_line(group_code);
   `);
+  if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'leased_line'").get()) {
+    db.exec('CREATE INDEX IF NOT EXISTS idx_leased_line_group ON leased_line(group_code)');
+  }
 }
 
 // The manager the ledger has for a group: with several, the one on most lines.

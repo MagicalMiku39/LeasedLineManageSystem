@@ -340,6 +340,9 @@ function App() {
             loading={managerPerformance.loading}
             error={managerPerformance.error}
             reload={managerPerformance.reload}
+            kpiMode={kpiMode}
+            onOpenLine={openDetail}
+            onOpenGroup={openGroup}
           />
         );
       default:

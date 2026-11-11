@@ -1829,41 +1829,62 @@ button.segment {
 .meter-target { margin-left: auto; }
 
 /* A few series per row on one scale; values at the right in text colors. */
-.grouped-rows {
+.grouped-scroll {
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.grouped-columns {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  width: max-content;
+  min-width: 100%;
+}
+
+.grouped-column {
   display: grid;
-  gap: 12px;
-  max-height: 300px;
-  overflow: auto;
+  flex: 1 0 104px;
+  grid-template-rows: auto 132px auto;
+  gap: 6px;
+  max-width: 200px;
+  justify-items: center;
 }
 
-.grouped-row {
-  display: grid;
-  grid-template-columns: 96px minmax(70px, 1fr) 130px;
-  align-items: center;
-  gap: 18px;
-}
-
-.grouped-label {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.grouped-label small {
-  display: block;
-  margin-top: 4px;
-  font-size: 11px;
-}
-
-.grouped-bars-cell {
+.grouped-values {
   display: grid;
   gap: 2px;
+  align-content: end;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.grouped-values strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.grouped-plot {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+  height: 100%;
+  border-bottom: 1px solid var(--chart-grid);
 }
 
 .grouped-bar {
   display: block;
-  height: 8px;
-  max-width: 100%;
-  border-radius: 0 4px 4px 0;
+  width: 22px;
+  border-radius: 4px 4px 0 0;
+}
+
+.grouped-bar.grouped-some {
+  min-height: 1px;
 }
 
 .grouped-swatch {
@@ -1877,28 +1898,84 @@ button.segment {
 .grouped-line { background: var(--chart-series-2); }
 .grouped-bar.grouped-negative { background: var(--red); }
 
-.grouped-values {
-  display: grid;
-  gap: 2px;
+.grouped-label {
   color: var(--muted);
   font-size: 12px;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 
-.grouped-values strong {
-  color: var(--ink);
-  font-weight: 600;
+.grouped-label small {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+}
+
+/* ---------- manager's added and cancelled lines ---------- */
+.manager-name-button[aria-expanded="true"] {
+  font-weight: 650;
+}
+
+.manager-table tbody tr.manager-open {
+  background: var(--accent-soft);
+}
+
+.manager-lines {
+  margin-top: 16px;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.manager-lines-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+
+.manager-lines-head h3 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.manager-lines-head .scope-actions {
+  flex: none;
+}
+
+.manager-lines-sum {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.manager-lines h4 {
+  margin: 18px 0 8px;
+  font-size: 14px;
+}
+
+.manager-lines .table-scroll {
+  border-top: 1px solid var(--rule);
+}
+
+.manager-lines td.manager-lines-wrap {
+  min-width: 150px;
+  max-width: 300px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.manager-lines td.manager-lines-wrap small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 @media (max-width: 640px) {
-  .grouped-row {
-    grid-template-columns: 62px minmax(30px, 1fr) 101px;
-    gap: 10px;
-  }
-
-  .grouped-values {
-    font-size: 11px;
+  .manager-lines {
+    padding: 14px;
   }
 }
 

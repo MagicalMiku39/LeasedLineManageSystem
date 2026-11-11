@@ -540,7 +540,7 @@ test('KPI achievement counts this year net, matches groups and keeps forecasts',
   assert.equal(overview.forecast.added, 0);
 
   const groups = await (await request('/api/kpi/groups?q=KPI00')).json();
-  assert.deepEqual(groups.find((row) => row.group_code === 'KPI001'), { group_code: 'KPI001', group_name: 'Kpi Group', manager_name: '张凯' });
+  assert.deepEqual(groups.find((row) => row.group_code === 'KPI001'), { group_code: 'KPI001', group_name: 'Kpi Group', manager_name: '张凯', source: 'ledger' });
   assert.deepEqual(await (await request('/api/kpi/groups?q=')).json(), []);
 
   const invalid = [
@@ -1529,6 +1529,66 @@ test('changing the password needs the current one and a code, and signs out the 
   // Put the test password back for the tests after this one.
   assert.equal((await change({ currentPassword: 'password2', newPassword: 'password1', code: totp(secret) })).status, 200);
   db.exec("DELETE FROM auth_attempt");
+});
+
+test('a manager\'s net figures open into the added and cancelled lines behind them', async () => {
+  const insert = db.prepare(`INSERT INTO leased_line
+    (group_code, group_name, group_product_code, product_name, product_status_name, ledger_status, manager_name, start_time, status_time, package_fee, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const line = (code, status, start, statusTime, fee) => insert.run('ML001', '明细集团', code, '互联网专线', status, status, '明细经理', start, statusTime, fee, nowIso());
+  line('MLL1', '正常在用', '2031-05-10 00:00:00', '2031-05-10 00:00:00', 100);
+  line('MLL2', '正常在用', '2031-04-02 00:00:00', '2031-04-02 00:00:00', 200);
+  line('MLL3', '正常在用', '2031-01-15 00:00:00', '2031-01-15 00:00:00', 300);
+  line('MLL4', '正式销户', '2029-01-01 00:00:00', '2031-05-20 00:00:00', 50);
+  line('MLL5', '正式销户', '2031-02-01 00:00:00', '2031-03-01 00:00:00', 60);
+  line('MLL6', '临时生成资料', '2031-05-01 00:00:00', '2031-05-01 00:00:00', 70);
+  line('MLL7', '正常在用', '2030-12-31 00:00:00', '2030-12-31 00:00:00', 80);
+
+  const query = 'month=2031-05&kpiMode=0';
+  const row = (await (await request(`/api/manager-performance?${query}&managers=${encodeURIComponent('明细经理')}`)).json()).rows[0];
+  const lines = await (await request(`/api/manager-performance/lines?${query}&manager=${encodeURIComponent('明细经理')}`)).json();
+  const codes = (list, period) => list.filter((item) => item.periods.includes(period)).map((item) => item.group_product_code).sort();
+  // Every period's list has exactly the lines its count is made of.
+  for (const period of ['month', 'quarter', 'year']) {
+    assert.equal(codes(lines.added, period).length, row[`${period}_added_count`], `${period} added`);
+    assert.equal(codes(lines.cancelled, period).length, row[`${period}_cancelled_count`], `${period} cancelled`);
+  }
+  assert.deepEqual(codes(lines.added, 'month'), ['MLL1']);
+  assert.deepEqual(codes(lines.added, 'quarter'), ['MLL1', 'MLL2']);
+  // A line opened and cancelled within the year is in both lists; one never in service is in neither.
+  assert.deepEqual(codes(lines.added, 'year'), ['MLL1', 'MLL2', 'MLL3', 'MLL5']);
+  assert.deepEqual(codes(lines.cancelled, 'month'), ['MLL4']);
+  assert.deepEqual(codes(lines.cancelled, 'year'), ['MLL4', 'MLL5']);
+  assert.equal(lines.added[0].group_product_code, 'MLL1', 'newest first');
+  assert.equal(lines.added.find((item) => item.group_product_code === 'MLL2').monthly_fee, 200);
+  assert.deepEqual((await (await request(`/api/manager-performance/lines?${query}&manager=nobody`)).json()).added, []);
+  assert.equal((await request(`/api/manager-performance/lines?${query}&manager=x`, {}, false)).status, 401);
+  db.exec("DELETE FROM leased_line WHERE group_product_code LIKE 'MLL%'");
+});
+
+test('KPI forecasts find groups on the full group list that have no lines yet', async () => {
+  db.exec("DELETE FROM group_directory");
+  const add = db.prepare('INSERT INTO group_directory (group_code, group_name, manager_name, segment) VALUES (?, ?, ?, ?)');
+  add.run('DIR001', '清单集团一', '清单经理', '商客');
+  add.run('KPI001', '清单里的旧名字', '清单经理', '商客');
+
+  const found = await (await request(`/api/kpi/groups?q=${encodeURIComponent('清单集团')}`)).json();
+  assert.deepEqual(found, [{ group_code: 'DIR001', group_name: '清单集团一', manager_name: '清单经理', source: 'directory' }]);
+  // A group with lines is offered once, as the ledger has it.
+  const both = (await (await request('/api/kpi/groups?q=KPI001')).json()).filter((item) => item.group_code === 'KPI001');
+  assert.deepEqual(both.map((item) => item.source), ['ledger']);
+
+  const now = new Date(Date.now() + 8 * 3600 * 1000);
+  const body = { group_code: 'DIR001', product_type: '互联网专线', kind: 'added', year: now.getUTCFullYear(), month: now.getUTCMonth() + 1, line_count: 2, confidence: 'likely' };
+  const created = await request('/api/kpi/forecasts', { method: 'POST', body });
+  assert.equal(created.status, 201);
+  const forecast = await created.json();
+  assert.deepEqual([forecast.group_name, forecast.manager_name], ['清单集团一', '清单经理']);
+  const unknown = await request('/api/kpi/forecasts', { method: 'POST', body: { ...body, group_code: 'NOWHERE1' } });
+  assert.equal(unknown.status, 400);
+  assert.match((await unknown.json()).error, /台账和全量集团清单中都没有该集团/);
+  db.prepare('DELETE FROM kpi_forecast WHERE id = ?').run(forecast.id);
+  db.exec("DELETE FROM group_directory");
 });
 
 test('logout invalidates the session cookie', async () => {

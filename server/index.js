@@ -849,6 +849,47 @@ app.get('/api/manager-performance', (req, res) => {
   }
 });
 
+// The lines behind one manager's net figures: added by start time, cancelled by status time,
+// each marked with the periods (month, quarter, year) of the chosen month it counts in.
+app.get('/api/manager-performance/lines', (req, res) => {
+  let period;
+  try {
+    period = periodFromMonth(req.query.month);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+    return;
+  }
+  const manager = String(req.query.manager ?? '');
+  const marks = (values) => values.map(() => '?').join(', ');
+  const rows = db.prepare(
+    `SELECT id, group_code, group_name, group_product_code, group_user_name, product_name,
+            COALESCE(product_status_name, ledger_status, '') AS status_name, start_time, status_time,
+            CASE WHEN COALESCE(actual_monthly_fee, 0) > 0 THEN actual_monthly_fee ELSE COALESCE(package_fee, 0) END AS monthly_fee
+     FROM ${leasedLineSource(req.query)}
+     WHERE COALESCE(NULLIF(manager_name, ''), '未填写') = ?
+       AND ((start_time >= ? AND start_time < ? AND COALESCE(product_status_name, ledger_status, '') IN (${marks(addedStatuses)}))
+         OR (status_time >= ? AND status_time < ? AND COALESCE(product_status_name, ledger_status, '') IN (${marks(cancelledStatuses)})))`
+  ).all(manager, period.yearStart, period.nextYearStart, ...addedStatuses, period.yearStart, period.nextYearStart, ...cancelledStatuses);
+  const ranges = [
+    ['month', period.monthStart, period.nextMonthStart],
+    ['quarter', period.quarterStart, period.nextQuarterStart],
+    ['year', period.yearStart, period.nextYearStart]
+  ];
+  const periodsOf = (value) => ranges.filter(([, start, end]) => value && value >= start && value < end).map(([key]) => key);
+  const list = (timeField, statuses) => rows
+    .filter((row) => statuses.includes(row.status_name) && periodsOf(row[timeField]).length > 0)
+    .map((row) => ({ ...row, periods: periodsOf(row[timeField]) }))
+    .sort((a, b) => String(b[timeField]).localeCompare(String(a[timeField])) || a.id - b.id);
+  res.json({
+    manager,
+    month: period.month,
+    year: period.year,
+    quarter: period.quarter,
+    added: list('start_time', addedStatuses),
+    cancelled: list('status_time', cancelledStatuses)
+  });
+});
+
 app.get('/api/stats', (req, res) => {
   const { month, monthStart, nextMonthStart } = monthRange(req.query.month);
   const currentPeriod = currentShanghaiPeriod();

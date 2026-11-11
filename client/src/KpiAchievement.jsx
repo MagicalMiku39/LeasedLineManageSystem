@@ -552,7 +552,7 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
             />
             <datalist id="kpi-group-options">
               {matches.groups.map((group) => (
-                <option key={group.group_code} value={group.group_code}>{`${group.group_name} · ${group.manager_name || '未填写'}`}</option>
+                <option key={group.group_code} value={group.group_code}>{`${group.group_name} · ${group.manager_name || '未填写'}${group.source === 'directory' ? ' · 未开通专线' : ''}`}</option>
               ))}
             </datalist>
           </label>
@@ -602,7 +602,8 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
               {confidenceOrder.filter((level) => level !== 'unrated').map((level) => <option key={level} value={level}>{confidenceName(form.kind, level)}</option>)}
             </select>
           </label>
-          {unknownGroup && <p className="kpi-form-hint">台账中没有该集团编码，按新集团登记，请手动填写名称并选择客户经理。</p>}
+          {matched?.source === 'directory' && <p className="kpi-form-hint">该集团来自全量集团清单，台账中还没有它的专线；名称和客户经理取自清单。</p>}
+          {unknownGroup && <p className="kpi-form-hint">台账和全量集团清单中都没有该集团编码，按新集团登记，请手动填写名称并选择客户经理。</p>}
           {formError && <p role="alert" className="operations-error kpi-form-hint">{formError}</p>}
           <div className="kpi-form-actions">
             <button type="submit" className="primary" disabled={saving || !data || (Boolean(code) && !matched && !unknownGroup)}>

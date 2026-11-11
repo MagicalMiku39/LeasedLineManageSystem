@@ -246,36 +246,44 @@ export function ProgressMeter({ value, forecast = 0, target, valueLabel = '当�
 }
 
 /**
- * A few series per row as horizontal bars on one shared scale, the values printed at the right
- * in text colors. A negative value draws in red from the same baseline and keeps its sign.
+ * A few series per period as upright columns on one shared scale: periods run left to right and
+ * each value is printed above its columns in text colors. A negative value draws in red from the
+ * same baseline and keeps its sign. With many periods the figure scrolls inside its own box.
  */
 export function GroupedBars({ rows, series, format = String, label }) {
   const max = Math.max(0, ...rows.flatMap((row) => series.map((item) => Math.abs(row.values[item.key] ?? 0))));
-  const width = (value) => `${max > 0 ? (Math.abs(value ?? 0) / max) * 100 : 0}%`;
+  const height = (value) => `${max > 0 ? (Math.abs(value ?? 0) / max) * 100 : 0}%`;
+  // Where the periods do not all fit, the view opens on the latest ones.
+  const scroller = useRef(null);
+  useEffect(() => {
+    if (scroller.current) scroller.current.scrollLeft = scroller.current.scrollWidth;
+  }, [rows.length]);
   return (
     <figure className="chart grouped-bars" aria-label={label}>
       <div className="chart-legend">
         {series.map((item) => <span key={item.key}><i className={`grouped-swatch grouped-${item.key}`} />{item.label}</span>)}
       </div>
-      <div className="grouped-rows">
-        {rows.map((row) => (
-          <div key={row.key} className="grouped-row">
-            <span className="grouped-label">{row.label}{row.sublabel && <small>{row.sublabel}</small>}</span>
-            <span className="grouped-bars-cell">
-              {series.map((item) => {
-                const value = row.values[item.key];
-                return <i key={item.key} className={`grouped-bar grouped-${item.key}${value < 0 ? ' grouped-negative' : ''}`} style={{ width: width(value) }} title={`${item.label} ${format(value)}`} />;
-              })}
-            </span>
-            <span className="grouped-values">
-              {series.map((item, index) => (
-                index === 0
-                  ? <strong key={item.key}>{format(row.values[item.key])}</strong>
-                  : <span key={item.key}>{format(row.values[item.key])}</span>
-              ))}
-            </span>
-          </div>
-        ))}
+      <div className="grouped-scroll" ref={scroller} tabIndex={0} role="group" aria-label={`${label}，月份从左到右`}>
+        <div className="grouped-columns">
+          {rows.map((row) => (
+            <div key={row.key} className="grouped-column">
+              <span className="grouped-values">
+                {series.map((item, index) => (
+                  index === 0
+                    ? <strong key={item.key}>{format(row.values[item.key])}</strong>
+                    : <span key={item.key}>{format(row.values[item.key])}</span>
+                ))}
+              </span>
+              <span className="grouped-plot">
+                {series.map((item) => {
+                  const value = row.values[item.key];
+                  return <i key={item.key} className={`grouped-bar grouped-${item.key}${value < 0 ? ' grouped-negative' : ''}${value ? ' grouped-some' : ''}`} style={{ height: height(value) }} title={`${item.label} ${format(value)}`} />;
+                })}
+              </span>
+              <span className="grouped-label">{row.label}{row.sublabel && <small>{row.sublabel}</small>}</span>
+            </div>
+          ))}
+        </div>
       </div>
     </figure>
   );
