@@ -272,3 +272,16 @@ button.group-link:hover { background: none; box-shadow: none; text-decoration: u
   .warning-digest-what, .warning-digest-state { grid-column: 2; }
   .warning-digest-state { justify-content: flex-start; text-align: left; }
 }
+
+/* ---------- KPI 预计任务筛选 ---------- */
+.kpi-list-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin: 0 0 10px; }
+.kpi-list-search { display: flex; flex: 1 1 260px; align-items: center; gap: 8px; min-width: 0; margin: 0; color: var(--muted); }
+.kpi-list-search input { flex: 1; min-width: 0; width: 100%; }
+.kpi-list-filters select { width: auto; min-width: 150px; max-width: 100%; }
+.kpi-list-count { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.kpi-list-filters .text-button { height: auto; padding: 2px 0; font-size: 12px; }
+.kpi-list-note { margin: 0 0 8px; font-size: 12px; }
+@media (max-width: 700px) {
+  .kpi-list-search { flex-basis: 100%; }
+  .kpi-list-filters select { flex: 1 1 140px; min-width: 0; }
+}

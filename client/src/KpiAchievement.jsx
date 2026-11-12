@@ -1,5 +1,5 @@
 import React, { useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { Check, ListChecks, Pencil, Plus, Trash2, Undo2, UsersRound } from 'lucide-react';
+import { Check, ListChecks, Pencil, Plus, Search, Trash2, Undo2, UsersRound } from 'lucide-react';
 import { isAbort, jsonBody, requestJson } from './api.js';
 import { InlineError } from './components/Feedback.jsx';
 import KpiProgress from './KpiProgress.jsx';
@@ -57,6 +57,14 @@ function useGroupMatches(keyword) {
   }, [keyword]);
   return state;
 }
+
+// What the forecast list can be narrowed to by state.
+const listStates = [
+  { key: '', label: '全部状态', test: () => true },
+  { key: 'open', label: '未落地（含部分落地）', test: (row) => !row.landed },
+  { key: 'overdue', label: '逾期', test: (row) => row.overdue },
+  { key: 'landed', label: '已全部落地', test: (row) => row.landed }
+];
 
 export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup, prefill }) {
   const [data, setData] = useState(null);
@@ -219,6 +227,28 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
   const kindLabel = kindLabels[form.kind];
   const currentMonth = data?.currentMonth ?? Number(beijingMonth().slice(5, 7));
   const reserve = data?.reserve || [];
+  // Narrowing the list while filling in progress; the figures above always count every forecast.
+  const [listSearch, setListSearch] = useState('');
+  const [listManager, setListManager] = useState('');
+  const [listState, setListState] = useState('');
+  const listManagers = useMemo(
+    () => [...new Set([...forecasts, ...reserve].map((row) => row.manager_name).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN')),
+    [forecasts, reserve]
+  );
+  const filtering = Boolean(listSearch.trim() || listManager || listState);
+  const shows = (row) => {
+    const words = listSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const text = `${row.group_name} ${row.group_code} ${row.manager_name} ${row.product_type} ${row.latest_note || ''}`.toLowerCase();
+    return (!listManager || row.manager_name === listManager)
+      && listStates.find((item) => item.key === listState).test(row)
+      && words.every((word) => text.includes(word));
+  };
+  const shownForecasts = filtering ? forecasts.filter(shows) : forecasts;
+  const shownReserve = filtering ? reserve.filter(shows) : reserve;
+  // A manager who no longer has any forecast cannot stay selected.
+  useEffect(() => {
+    if (listManager && !listManagers.includes(listManager)) setListManager('');
+  }, [listManager, listManagers]);
   const overdue = forecast?.overdue;
   // The gap closed step by step, surest forecasts first; and the same as one bar the target long.
   const steps = data ? gapSteps(actual.net, target, forecast.byConfidence) : [];
@@ -628,14 +658,36 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
             这些预计的月份已过，还有新增 {overdue.added} 条、销户 {overdue.cancelled} 条没有落地。请更新进展、确认落地，或在“月份”里改到新的月份。
           </p>
         )}
+        {!loading && forecasts.length + reserve.length > 0 && (
+          <div className="kpi-list-filters" role="search" aria-label="筛选预计任务">
+            <label className="kpi-list-search">
+              <Search size={16} aria-hidden="true" />
+              <input aria-label="搜索预计任务" placeholder="集团名称、集团编码、客户经理、产品类型或进展" value={listSearch} onChange={(event) => setListSearch(event.target.value)} />
+            </label>
+            <select aria-label="按客户经理筛选" value={listManager} onChange={(event) => setListManager(event.target.value)}>
+              <option value="">全部客户经理</option>
+              {listManagers.map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+            <select aria-label="按状态筛选" value={listState} onChange={(event) => setListState(event.target.value)}>
+              {listStates.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
+            </select>
+            {filtering && (
+              <>
+                <span className="kpi-list-count" role="status">显示 {shownForecasts.length + shownReserve.length} / {forecasts.length + reserve.length} 条</span>
+                <button type="button" className="text-button" onClick={() => { setListSearch(''); setListManager(''); setListState(''); }}>清除筛选</button>
+              </>
+            )}
+          </div>
+        )}
+        {filtering && <p className="operations-rule kpi-list-note">筛选只影响下面列表的显示，上方的统计数字不变。</p>}
         <div className="table-scroll kpi-table-scroll">
           <table className="data-table kpi-table">
             {forecastHead}
             <tbody>
-              {!loading && forecasts.map(forecastRow)}
-              {(loading || forecasts.length === 0) && (
+              {!loading && shownForecasts.map(forecastRow)}
+              {(loading || shownForecasts.length === 0) && (
                 <tr className="state-row">
-                  <td colSpan="10" className="empty">{loading ? '正在加载…' : '暂无预计新增或销户，可在上方填写'}</td>
+                  <td colSpan="10" className="empty">{loading ? '正在加载…' : forecasts.length === 0 ? '暂无预计新增或销户，可在上方填写' : '没有符合筛选条件的预计任务'}</td>
                 </tr>
               )}
             </tbody>
@@ -643,11 +695,14 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
         </div>
         {!loading && reserve.length > 0 && (
           <>
-            <h4 className="kpi-reserve-title">明年储备 <span>{reserve.length} 条 · 不计入 {data.year} 年 KPI</span></h4>
+            <h4 className="kpi-reserve-title">明年储备 <span>{filtering ? `${shownReserve.length} / ` : ''}{reserve.length} 条 · 不计入 {data.year} 年 KPI</span></h4>
             <div className="table-scroll kpi-table-scroll">
               <table className="data-table kpi-table">
                 {forecastHead}
-                <tbody>{reserve.map(forecastRow)}</tbody>
+                <tbody>
+                  {shownReserve.map(forecastRow)}
+                  {shownReserve.length === 0 && <tr className="state-row"><td colSpan="10" className="empty">没有符合筛选条件的储备</td></tr>}
+                </tbody>
               </table>
             </div>
           </>
