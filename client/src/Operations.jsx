@@ -1,11 +1,11 @@
 import React, { useEffect, useImperativeHandle, useMemo, useState } from 'react';
-import { Bell, BellOff, Mail, Search } from 'lucide-react';
+import { Bell, BellOff, Mail, MailPlus, Search } from 'lucide-react';
 import { SegmentBar, SegmentLegend } from './charts.jsx';
 import SubTabs from './components/SubTabs.jsx';
 import KpiAchievement from './KpiAchievement.jsx';
 import StrategicCustomers from './StrategicCustomers.jsx';
 import Workbench from './Workbench.jsx';
-import { WarningMailDialog, WarningMailSettings } from './WarningMail.jsx';
+import { WarningDigestDialog, WarningMailDialog, WarningMailSettings } from './WarningMail.jsx';
 import { beijingDate, money } from './utils.js';
 import './operations.css';
 
@@ -23,10 +23,10 @@ const sections = [
 
 // The operations centre: a sub-menu over its sections. The shared top-bar refresh, export and
 // (where a section has its own list to import) import act on the section that is open.
-export default function Operations({ ref, kpiMode, refreshToken, onOpenLine, section = 'warnings', onSectionChange, strategicFocus, onNavigate, onOpenGroup }) {
+export default function Operations({ ref, kpiMode, refreshToken, onOpenLine, section = 'warnings', onSectionChange, strategicFocus, onNavigate, onOpenGroup, kpiPrefill }) {
   return <main className="operations-page">
     <SubTabs label="运营中心" items={sections} active={section} onChange={(key) => onSectionChange?.(key)} />
-    {section === 'kpi' && <KpiAchievement ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} onOpenGroup={onOpenGroup} />}
+    {section === 'kpi' && <KpiAchievement ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} onOpenGroup={onOpenGroup} prefill={kpiPrefill} />}
     {section === 'strategic' && <StrategicCustomers ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} onOpenLine={onOpenLine} focus={strategicFocus} onOpenGroup={onOpenGroup} />}
     {section === 'overview' && <Workbench ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} onNavigate={onNavigate} />}
     {section === 'warnings' && <ArrearsWarnings ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} onOpenLine={onOpenLine} onOpenGroup={onOpenGroup} />}
@@ -45,6 +45,7 @@ function ArrearsWarnings({ ref, kpiMode, refreshToken, onOpenLine, onOpenGroup }
   const [saving, setSaving] = useState(null);
   const [mailRow, setMailRow] = useState(null);
   const [showMailSettings, setShowMailSettings] = useState(false);
+  const [showDigest, setShowDigest] = useState(false);
   const [notice, setNotice] = useState('');
   useEffect(() => {
     const controller = new AbortController();
@@ -123,6 +124,7 @@ function ArrearsWarnings({ ref, kpiMode, refreshToken, onOpenLine, onOpenGroup }
       <label>预警等级<select value={level} onChange={(event) => setLevel(event.target.value)}><option value="all">全部等级</option>{Object.entries(levels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       <span>{loading ? '加载中' : `${rows.length} 条`}</span>
       <button onClick={() => setShowMailSettings((value) => !value)}><Mail size={16} />客户经理邮箱</button>
+      <button title="每位客户经理一封邮件，列出其名下全部欠费停机专线" disabled={loading || !data} onClick={() => { setNotice(''); setShowDigest(true); }}><MailPlus size={16} />汇总发送</button>
     </div>
     {showMailSettings && <WarningMailSettings onClose={() => setShowMailSettings(false)} />}
     {notice && <p role="status">{notice}</p>}
@@ -136,6 +138,11 @@ function ArrearsWarnings({ ref, kpiMode, refreshToken, onOpenLine, onOpenGroup }
         <td className="operations-actions-cell"><div className="operations-row-actions"><button title="发送欠费预警报告" aria-pressed={row.mark === 'remind'} disabled={saving !== null} onClick={() => { setNotice(''); setMailRow(row); }}><Bell size={15} />提醒</button><button title="忽略此条预警" aria-pressed={row.mark === 'ignore'} disabled={saving !== null} onClick={() => saveMark(row, 'ignore')}><BellOff size={15} />忽略</button>{row.mark !== 'unmarked' && <button disabled={saving !== null} onClick={() => saveMark(row, 'unmarked')}>重置</button>}</div></td>
       </tr>)}{(loading || !rows.length) && <tr><td colSpan="9" className="empty">{loading ? '正在加载预警…' : error ? '预警加载失败，请刷新重试' : '暂无符合条件的预警'}</td></tr>}</tbody>
     </table></div>
+    {showDigest && <WarningDigestDialog asOf={asOf} kpiMode={kpiMode} onClose={() => setShowDigest(false)} onConfigure={() => { setShowDigest(false); setShowMailSettings(true); }} onSent={(ids) => {
+      const marked = new Set(ids);
+      setData((current) => current && ({ ...current, rows: current.rows.map((item) => marked.has(item.id) ? { ...item, mark: 'remind' } : item) }));
+      setNotice(`汇总邮件已提交发送，${ids.length} 条专线已标为“提醒”`);
+    }} />}
     {mailRow && <WarningMailDialog row={mailRow} asOf={asOf} kpiMode={kpiMode} onClose={() => setMailRow(null)} onConfigure={() => { setMailRow(null); setShowMailSettings(true); }} onQueued={(id, result) => {
       setData((current) => current && ({ ...current, rows: current.rows.map((item) => item.id === id ? { ...item, mark: 'remind' } : item) }));
       setNotice(`预警报告已提交至 ${result.recipient} 的发送队列`);

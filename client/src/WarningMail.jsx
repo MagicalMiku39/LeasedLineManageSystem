@@ -83,3 +83,108 @@ export function WarningMailDialog({ row, asOf, kpiMode, onClose, onQueued, onCon
     <div className="warning-mail-footer"><button disabled={sending} onClick={onConfigure}>设置收件邮箱</button><button disabled={!preview || sending || attempted} onClick={send}><Mail size={16} />{sending ? '正在提交…' : '发送报告'}</button></div>
   </dialog>;
 }
+
+const digestLevels = [['cancel', '待销户'], ['red', '红色'], ['yellow', '黄色'], ['green', '绿色']];
+const yuan = (value) => Number(value || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/**
+ * 汇总发送: one message per manager listing every arrears line of theirs, instead of one message
+ * per line. Nothing goes out until the chosen managers are confirmed; each is sent on its own
+ * and reports its own result.
+ */
+export function WarningDigestDialog({ asOf, kpiMode, onClose, onSent, onConfigure }) {
+  const dialog = useRef(null);
+  const [data, setData] = useState(null);
+  const [error, setError] = useState('');
+  const [chosen, setChosen] = useState(() => new Set());
+  const [open, setOpen] = useState(null);
+  const [sending, setSending] = useState(false);
+  const [results, setResults] = useState({});
+  const [history, setHistory] = useState([]);
+
+  useEffect(() => {
+    dialog.current.showModal();
+    const controller = new AbortController();
+    request('/digest/preview', { ...json({ asOf, kpiMode: kpiMode ? '1' : '0' }), signal: controller.signal })
+      .then((value) => { setData(value); setChosen(new Set(value.managers.filter((item) => item.id).map((item) => item.id))); })
+      .catch((err) => { if (err.name !== 'AbortError') setError(err.message); });
+    request('/digest/history', { signal: controller.signal }).then(setHistory).catch(() => {});
+    return () => controller.abort();
+  }, [asOf, kpiMode]);
+
+  const managers = data?.managers || [];
+  const sendable = managers.filter((item) => item.id && !results[item.id]);
+  const picked = sendable.filter((item) => chosen.has(item.id));
+  const finished = Object.keys(results).length > 0 && !sending;
+
+  function toggle(id) {
+    const next = new Set(chosen);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setChosen(next);
+  }
+
+  // One after another, so a failure names its manager and the rest still go out.
+  async function send() {
+    setSending(true);
+    setError('');
+    const marked = [];
+    for (const item of picked) {
+      setResults((current) => ({ ...current, [item.id]: { state: 'sending' } }));
+      try {
+        const result = await request(`/digest/${item.id}/send`, { method: 'POST' });
+        marked.push(...(result.lineIds || []));
+        setResults((current) => ({ ...current, [item.id]: { state: 'queued' } }));
+      } catch (err) {
+        setResults((current) => ({ ...current, [item.id]: { state: 'failed', message: err.message } }));
+      }
+    }
+    setSending(false);
+    if (marked.length) onSent(marked);
+  }
+
+  return <dialog ref={dialog} className="warning-mail-dialog warning-digest-dialog" onCancel={(event) => { if (sending) event.preventDefault(); else onClose(); }} aria-labelledby="warning-digest-title">
+    <div className="warning-mail-title"><h3 id="warning-digest-title">汇总发送欠费预警</h3><button title="关闭" disabled={sending} onClick={onClose}><X size={18} /></button></div>
+    <p className="operations-rule">统计日期 {asOf}。每位客户经理一封邮件，列出其名下全部欠费停机专线（不含已标“忽略”的），并附本月和本年度净增。勾选后点击发送；发送后这些专线标为“提醒”。</p>
+    {data && <p className="operations-rule">抄送：{data.cc?.join('；') || '—'}{data.withoutManager > 0 ? ` · 另有 ${data.withoutManager} 条专线没有客户经理，未列入` : ''}</p>}
+    {error && <p className="operations-error" role="alert">{error}</p>}
+    {!data && !error && <p>正在生成汇总…</p>}
+    {data && managers.length === 0 && <p>没有需要提醒的欠费停机专线。</p>}
+    {managers.length > 0 && (
+      <ul className="warning-digest-list">
+        {managers.map((item) => {
+          const result = item.id ? results[item.id] : null;
+          return (
+            <li key={item.managerKey}>
+              <div className="warning-digest-row">
+                <input type="checkbox" aria-label={`发送给${item.manager}`} disabled={!item.id || sending || Boolean(result)} checked={Boolean(item.id) && chosen.has(item.id) && !result} onChange={() => toggle(item.id)} />
+                <div className="warning-digest-who">
+                  <strong>{item.manager}</strong>
+                  <small>{item.recipient || '未设置邮箱'}</small>
+                </div>
+                <div className="warning-digest-what">
+                  <span>{item.lineCount} 条 · 欠费 {yuan(item.totalArrears)} 元</span>
+                  <small>{digestLevels.filter(([key]) => item.levels[key] > 0).map(([key, label]) => <span key={key} className={`operations-level-${key}`}>{label} {item.levels[key]}</span>)}</small>
+                </div>
+                <div className="warning-digest-state">
+                  {result?.state === 'queued' && <span className="operations-level-green">已提交发送</span>}
+                  {result?.state === 'sending' && <span>正在提交…</span>}
+                  {result?.state === 'failed' && <span className="operations-error" role="alert">{result.message}</span>}
+                  {!result && item.problem && <span className="operations-rule">{item.problem}</span>}
+                  <button type="button" className="text-button" aria-expanded={open === item.managerKey} onClick={() => setOpen(open === item.managerKey ? null : item.managerKey)}>{open === item.managerKey ? '收起' : '查看内容'}</button>
+                </div>
+              </div>
+              {open === item.managerKey && <><p className="operations-rule">主题：{item.subject}</p><pre className="warning-mail-body">{item.body}</pre></>}
+            </li>
+          );
+        })}
+      </ul>
+    )}
+    {history.length > 0 && <details className="warning-mail-history"><summary>最近汇总发送记录</summary>{history.map((item) => <p key={item.id}>{new Date(item.sent_at || item.created_at).toLocaleString('zh-CN')} · {item.manager_name} · {item.lineCount} 条 · {statusLabels[item.status] || item.status} · {item.recipient}{item.error ? ` · ${item.error}` : ''}</p>)}</details>}
+    <div className="warning-mail-footer">
+      <button disabled={sending} onClick={onConfigure}>设置收件邮箱</button>
+      {finished && sendable.length === 0
+        ? <button onClick={onClose}>完成</button>
+        : <button disabled={!picked.length || sending} onClick={send}><Mail size={16} />{sending ? '正在发送…' : `发送给 ${picked.length} 位客户经理`}</button>}
+    </div>
+  </dialog>;
+}

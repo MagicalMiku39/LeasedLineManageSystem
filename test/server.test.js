@@ -1591,6 +1591,119 @@ test('KPI forecasts find groups on the full group list that have no lines yet', 
   db.exec("DELETE FROM group_directory");
 });
 
+test('prospects: groups with no line in service, ranked, per manager, with follow-up marks', async () => {
+  db.exec("DELETE FROM group_directory; DELETE FROM group_followup");
+  const add = db.prepare('INSERT INTO group_directory (group_code, group_name, manager_name, group_level, segment, key_category, employee_count, member_billing) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+  add.run('PR001', '潜客战客', '潜客经理', 'B', '战客', '', 50, 100);
+  add.run('PR002', '潜客要客', '潜客经理', 'C', '商客', '要客', 900, null);
+  add.run('PR003', '潜客大户', '另一经理', 'A', '商客', '', 5000, 8000);
+  add.run('PR004', '潜客小户', '另一经理', 'D', '商客', '', null, null);
+  add.run('PR005', '潜客流失', '清单经理', 'A', '商客', '', 10, 10);
+  add.run('PR006', '潜客在用', '清单经理', 'A', '战客', '', 10, 10);
+  const insert = db.prepare(`INSERT INTO leased_line (group_code, group_name, group_product_code, product_name, product_status_name, ledger_status, manager_name, start_time, status_time, updated_at)
+    VALUES (?, ?, ?, '互联网专线', ?, ?, ?, '2025-01-01', '2026-02-01', ?)`);
+  insert.run('PR005', '潜客流失', 'PRL1', '正式销户', '正式销户', '台账经理', nowIso());
+  insert.run('PR006', '潜客在用', 'PRL2', '正常在用', '正常在用', '台账经理', nowIso());
+  // No strategic list of its own here: the full list's 战客 mark decides.
+  const kept = db.prepare('SELECT * FROM strategic_customer').all();
+  db.exec('DELETE FROM strategic_customer');
+
+  const list = async (query = '') => (await request(`/api/groups/prospects?kpiMode=0&search=PR0${query}`)).json();
+  assert.equal((await request('/api/groups/prospects', {}, false)).status, 401);
+  const never = await list();
+  // Strategic first, then key customers, then by level and size; a missing figure sorts last.
+  assert.deepEqual(never.rows.map((row) => row.groupCode), ['PR001', 'PR002', 'PR003', 'PR004']);
+  assert.deepEqual([never.rows[3].employeeCount, never.rows[3].memberBilling], [null, null]);
+  assert.deepEqual((await list('&sort=employees')).rows.map((row) => row.groupCode), ['PR003', 'PR002', 'PR001', 'PR004']);
+  assert.deepEqual((await list('&sort=billing')).rows.map((row) => row.groupCode), ['PR003', 'PR001', 'PR002', 'PR004']);
+  assert.deepEqual((await list('&focus=key')).rows.map((row) => row.groupCode), ['PR002']);
+  assert.deepEqual((await list('&focus=a')).rows.map((row) => row.groupCode), ['PR003']);
+  assert.deepEqual((await list(`&manager=${encodeURIComponent('另一经理')}`)).rows.map((row) => row.groupCode), ['PR003', 'PR004']);
+  // A group whose lines are all cancelled is lost, under the ledger's manager; one in service is neither.
+  const lost = await list('&type=lost');
+  assert.deepEqual(lost.rows.map((row) => [row.groupCode, row.managerName, row.cancelledLines]), [['PR005', '台账经理', 1]]);
+  const mine = never.managers.find((row) => row.name === '潜客经理');
+  assert.deepEqual([mine.never, mine.neverStrategic, mine.neverKey, mine.neverA, mine.lost], [2, 1, 1, 0, 0]);
+  assert.equal(never.managers.find((row) => row.name === '台账经理').lost, 1);
+  assert.equal(never.managers[0].name, '潜客经理', 'managers with the most key prospects come first');
+
+  const follow = (code, body) => request(`/api/groups/${code}/followup`, { method: 'PUT', body });
+  assert.equal((await follow('PR003', { status: 'nonsense' })).status, 400);
+  assert.equal((await follow('NOPE99', { status: 'contacted' })).status, 404);
+  assert.equal((await follow('PR003', { status: 'contacted', note: '已约下周拜访' })).status, 200);
+  assert.equal((await follow('PR004', { status: 'excluded' })).status, 200);
+  const after = await list();
+  assert.deepEqual(after.rows.map((row) => row.groupCode), ['PR001', 'PR002', 'PR003'], 'excluded groups leave the list');
+  assert.deepEqual([after.rows[2].followStatus, after.rows[2].followNote], ['contacted', '已约下周拜访']);
+  assert.deepEqual((await list('&follow=excluded')).rows.map((row) => row.groupCode), ['PR004']);
+  assert.deepEqual((await list('&follow=none')).rows.map((row) => row.groupCode), ['PR001', 'PR002']);
+  assert.equal(after.summary.never, never.summary.never - 1);
+  // The mark survives a replacement of the full list, and clearing it removes the row.
+  db.exec("UPDATE group_directory SET import_id = 99");
+  assert.equal((await follow('PR003', { status: '', note: '' })).status, 200);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM group_followup WHERE group_code = 'PR003'").get().count, 0);
+  assert.equal((await request('/api/groups/prospects/export?kpiMode=0&search=PR0')).status, 200);
+
+  const restore = db.prepare('INSERT INTO strategic_customer (group_code, group_name, manager_name, import_id) VALUES (?, ?, ?, ?)');
+  for (const row of kept) restore.run(row.group_code, row.group_name, row.manager_name, row.import_id);
+  db.exec("DELETE FROM leased_line WHERE group_product_code LIKE 'PRL%'; DELETE FROM group_directory; DELETE FROM group_followup");
+});
+
+test('arrears summary mail: one message per manager, sent by hand, marks its lines', async (t) => {
+  const { agentMail } = await import('../server/lib/agent-mail.js');
+  t.mock.method(agentMail, 'defaultCc', () => ['audit@example.com']);
+  const sent = [];
+  t.mock.method(agentMail, 'send', async (report) => { sent.push(report); return { queued: true }; });
+  const insert = db.prepare(`INSERT INTO leased_line(group_product_code, group_code, group_name, manager_name, manager_job_no,
+    product_name, product_status_name, status_time, total_arrears, start_time) VALUES (?, ?, ?, ?, ?, '互联网专线', ?, ?, ?, ?)`);
+  const a1 = Number(insert.run('DG-1', 'DG01', '汇总集团甲', '汇总经理', 'DJ1', '停机', '2026-01-01', 300, '2025-01-01').lastInsertRowid);
+  const a2 = Number(insert.run('DG-2', 'DG02', '汇总集团乙', '汇总经理', 'DJ1', '停机', '2026-09-01', 50.5, '2025-01-01').lastInsertRowid);
+  const ignored = Number(insert.run('DG-3', 'DG02', '汇总集团乙', '汇总经理', 'DJ1', '停机', '2026-08-01', 70, '2025-01-01').lastInsertRowid);
+  const b1 = Number(insert.run('DG-4', 'DG03', '汇总集团丙', '没邮箱经理', 'DJ2', '停机', '2026-07-01', 10, '2025-01-01').lastInsertRowid);
+  insert.run('DG-5', 'DG01', '汇总集团甲', '汇总经理', 'DJ1', '正常在用', '2026-10-05', 0, '2026-10-05');
+  await request(`/api/warnings/${ignored}`, { method: 'PATCH', body: { mark: 'ignore' } });
+  await request('/api/warnings/mail/contacts', { method: 'PUT', body: { key: 'job:DJ1', email: 'manager@example.com' } });
+
+  const preview = async () => (await request('/api/warnings/digest/preview', { method: 'POST', body: { asOf: '2026-10-23', kpiMode: '0' } })).json();
+  assert.equal((await request('/api/warnings/digest/preview', { method: 'POST', body: { asOf: 'bad' } })).status, 400);
+  const first = await preview();
+  const mine = first.managers.find((item) => item.manager === '汇总经理');
+  const other = first.managers.find((item) => item.manager === '没邮箱经理');
+  assert.deepEqual([mine.lineCount, mine.totalArrears, mine.recipient, mine.problem, Boolean(mine.id)], [2, 350.5, 'manager@example.com', '', true]);
+  assert.deepEqual(mine.levels, { cancel: 1, red: 0, yellow: 0, green: 1 });
+  assert.deepEqual([other.id, other.problem, other.lineCount], [null, '未设置邮箱', 1]);
+  // One message lists every line, most urgent first, and leaves the ignored one out.
+  assert.match(mine.subject, /欠费停机预警汇总｜汇总经理｜2 条｜2026-10-23/);
+  assert.ok(mine.body.indexOf('DG-1') > 0 && mine.body.indexOf('DG-1') < mine.body.indexOf('DG-2'));
+  assert.equal(mine.body.includes('DG-3'), false);
+  assert.match(mine.body, /欠费合计 350\.50 元/);
+  assert.match(mine.body, /本月（2026-10）：新增 1 条，销户 0 条，净增 \+1 条/);
+  assert.equal(sent.length, 0, 'a preview sends nothing');
+
+  const send = (id) => request(`/api/warnings/digest/${id}/send`, { method: 'POST' });
+  assert.equal((await send('no-such-id')).status, 400);
+  const done = await send(mine.id);
+  assert.equal(done.status, 200);
+  assert.deepEqual((await done.json()).lineIds.sort(), [a1, a2].sort());
+  assert.equal(sent.length, 1);
+  assert.deepEqual([sent[0].recipient, sent[0].cc], ['manager@example.com', ['audit@example.com']]);
+  const marks = Object.fromEntries(db.prepare('SELECT line_id, mark FROM line_warning_mark WHERE line_id IN (?, ?, ?, ?)').all(a1, a2, ignored, b1).map((row) => [row.line_id, row.mark]));
+  assert.deepEqual(marks, { [a1]: 'remind', [a2]: 'remind', [ignored]: 'ignore' });
+  // The same content is not offered twice; a change to the lines makes a new one that can be sent.
+  const again = (await preview()).managers.find((item) => item.manager === '汇总经理');
+  assert.deepEqual([again.id, again.problem], [null, '相同内容已发送过']);
+  db.prepare('UPDATE leased_line SET total_arrears = 301 WHERE id = ?').run(a1);
+  const changed = (await preview()).managers.find((item) => item.manager === '汇总经理');
+  assert.equal(Boolean(changed.id), true);
+  db.prepare('UPDATE leased_line SET total_arrears = 302 WHERE id = ?').run(a1);
+  assert.equal((await send(changed.id)).status, 409, 'a stale preview is refused');
+  assert.equal(sent.length, 1);
+  const history = await (await request('/api/warnings/digest/history')).json();
+  assert.deepEqual([history[0].manager_name, history[0].status, history[0].lineCount, history[0].recipient], ['汇总经理', 'queued', 2, 'manager@example.com']);
+
+  db.exec("DELETE FROM line_warning_mark WHERE line_id IN (SELECT id FROM leased_line WHERE group_product_code LIKE 'DG-%'); DELETE FROM leased_line WHERE group_product_code LIKE 'DG-%'; DELETE FROM warning_mail_digest; DELETE FROM warning_mail_contact WHERE manager_key = 'job:DJ1'");
+});
+
 test('logout invalidates the session cookie', async () => {
   const response = await request('/api/auth/logout', { method: 'POST' });
   assert.equal(response.status, 200);

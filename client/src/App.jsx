@@ -73,6 +73,8 @@ function App() {
   // Which group's profile the 集团 page shows; null is the list. A new object each time, so the page follows it.
   const [groupFocus, setGroupFocus] = useState({ groupCode: null });
   const [groupsRevision, setGroupsRevision] = useState(0);
+  // A group handed from the prospect list to the KPI forecast form; a new object each time.
+  const [kpiPrefill, setKpiPrefill] = useState(null);
   const [operationsSection, setOperationsSection] = useState('warnings');
   // Where the 导入概览's links point: a strategic group or an import batch, opened once each.
   const [strategicFocus, setStrategicFocus] = useState(null);
@@ -242,6 +244,14 @@ function App() {
     window.scrollTo(0, 0);
   }
 
+  // From the prospect list: open the KPI forecast form with the group filled in.
+  function forecastForGroup(groupCode) {
+    setKpiPrefill({ groupCode });
+    setStrategicFocus(null);
+    setOperationsSection('kpi');
+    setActiveView('operations');
+  }
+
   function refreshCurrentView() {
     if (activeView === 'operations') {
       operationsActions.current?.refresh();
@@ -292,6 +302,7 @@ function App() {
             strategicFocus={strategicFocus}
             onNavigate={navigate}
             onOpenGroup={openGroup}
+            kpiPrefill={kpiPrefill}
           />
         );
       case 'revenue':
@@ -307,7 +318,7 @@ function App() {
           />
         );
       case 'groups':
-        return <Groups ref={groupsActions} kpiMode={kpiMode} refreshToken={groupsRevision} onOpenLine={openDetail} focus={groupFocus} />;
+        return <Groups ref={groupsActions} kpiMode={kpiMode} refreshToken={groupsRevision} onOpenLine={openDetail} focus={groupFocus} onForecast={forecastForGroup} />;
       case 'imports':
         return <ImportRecords refreshToken={importsRevision} onOpenLine={openDetail} focus={importsFocus} tabs={ledgerTabs} />;
       case 'settings':

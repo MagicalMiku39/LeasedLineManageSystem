@@ -4,6 +4,7 @@ import { apiBase, isAbort, jsonBody, requestJson } from './api.js';
 import { DataTable, Loader, Metric, Notice } from './GroupRevenue.jsx';
 import { GroupedBars } from './charts.jsx';
 import { confidenceName } from './kpiRows.js';
+import Prospects from './Prospects.jsx';
 import { changeFieldLabels, changeTypeLabel } from './ledgerChanges.js';
 import { beijingTime, money } from './utils.js';
 import './operations.css';
@@ -284,8 +285,11 @@ function Profile({ data, code, revision, onOpenLine }) {
  * 集团: every group on the full group list together with every group the ledger has lines for,
  * and one page per group that gathers its lines, arrears risk, revenue, forecasts and changes.
  */
-export default function Groups({ ref, kpiMode, refreshToken, onOpenLine, focus }) {
+export default function Groups({ ref, kpiMode, refreshToken, onOpenLine, focus, onForecast }) {
   const [revision, setRevision] = useState(0);
+  // 全部集团, or the prospect list: groups with no line in service.
+  const [tab, setTab] = useState('all');
+  const [prospectQuery, setProspectQuery] = useState('');
   const [code, setCode] = useState(null);
   const [typed, setTyped] = useState('');
   const [search, setSearch] = useState('');
@@ -310,21 +314,25 @@ export default function Groups({ ref, kpiMode, refreshToken, onOpenLine, focus }
 
   const filterQuery = new URLSearchParams({ kpiMode: kpiMode ? '1' : '0', ...(search && { search }), ...(lines && { lines }), ...(mark && { mark }), ...(level && { level }) }).toString();
   const stamp = `${revision}:${refreshToken}`;
-  const list = useResource(code ? null : `/groups?${filterQuery}&page=${page}`, stamp);
+  const list = useResource(code || tab !== 'all' ? null : `/groups?${filterQuery}&page=${page}`, stamp);
   const profile = useResource(code ? `/groups/${encodeURIComponent(code)}?kpiMode=${kpiMode ? '1' : '0'}` : null, stamp);
 
   useImperativeHandle(ref, () => ({
     refresh,
-    openImport: () => { setCode(null); setImporting(true); },
-    exportData: () => { window.location.href = `${apiBase}/groups/export?${filterQuery}`; }
-  }), [filterQuery]);
+    openImport: () => { setCode(null); setTab('all'); setImporting(true); },
+    exportData: () => {
+      window.location.href = tab === 'prospects' && !code && prospectQuery
+        ? `${apiBase}/groups/prospects/export?${prospectQuery}`
+        : `${apiBase}/groups/export?${filterQuery}`;
+    }
+  }), [filterQuery, tab, code, prospectQuery]);
 
   const data = list.data;
   const imported = data?.list;
   const summary = data?.summary;
   const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
   const pick = (setter) => (event) => { setter(event.target.value); setPage(1); };
-  const failure = code ? profile.error : list.error;
+  const failure = code ? profile.error : tab === 'all' ? list.error : '';
 
   return (
     <main className="revenue-page groups-page">
@@ -333,8 +341,20 @@ export default function Groups({ ref, kpiMode, refreshToken, onOpenLine, focus }
           <button onClick={() => setCode(null)}>集团</button>
           {code && <><ChevronRight size={14} /><span>集团档案</span></>}
         </div>
+        {!code && (
+          <div className="rev-segment" role="group" aria-label="集团视图">
+            <button aria-pressed={tab === 'all'} onClick={() => setTab('all')}>全部集团</button>
+            <button aria-pressed={tab === 'prospects'} onClick={() => { setTab('prospects'); setImporting(false); }}>潜客清单</button>
+          </div>
+        )}
       </div>
-      {!code && (
+      {!code && tab === 'prospects' && (
+        <div className="rev-context">
+          <span>潜客 = 没有在用专线的集团：未开通（台账中没有专线）和已流失（曾有专线，现已全部销户）</span>
+          <span>台账范围：{kpiMode ? 'KPI 十类产品' : '全部产品'} · 跟进标记按集团编码保存，重新导入全量清单后保留</span>
+        </div>
+      )}
+      {!code && tab === 'all' && (
         <div className="rev-context">
           <span>{imported
             ? `全量集团清单：${imported.file_name || '未命名'} · ${count(imported.row_count)} 个集团${imported.data_month ? ` · 数据月份 ${dataMonth(imported.data_month)}` : ''} · ${beijingTime(imported.imported_at)} 导入`
@@ -358,6 +378,15 @@ export default function Groups({ ref, kpiMode, refreshToken, onOpenLine, focus }
 
       {code ? (
         profile.data ? <Profile data={profile.data} code={code} revision={stamp} onOpenLine={onOpenLine} /> : profile.loading ? <Loader /> : null
+      ) : tab === 'prospects' ? (
+        <Prospects
+          kpiMode={kpiMode}
+          stamp={stamp}
+          Badges={GroupBadges}
+          onQuery={setProspectQuery}
+          onOpenGroup={(groupCode) => { setCode(groupCode); window.scrollTo(0, 0); }}
+          onForecast={onForecast}
+        />
       ) : !data ? (list.loading ? <Loader /> : null) : (
         <>
           <section className="rev-metrics" aria-label="集团概览">

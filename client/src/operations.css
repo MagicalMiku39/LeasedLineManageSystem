@@ -244,3 +244,31 @@ button.group-link:hover { background: none; box-shadow: none; text-decoration: u
 @media (max-width: 700px) {
   .groups-page .rev-group-filters > select { width: 100%; }
 }
+
+/* ---------- 潜客清单 ---------- */
+.prospect-controls { flex-wrap: wrap; row-gap: 10px; margin: 0 0 14px; }
+.prospect-follow { display: grid; grid-template-columns: 104px minmax(110px, 1fr); gap: 6px; min-width: 230px; }
+.revenue-page .prospect-follow select, .revenue-page .prospect-follow input { min-height: 32px; padding: 4px 8px; font-size: 12px; }
+.prospect-follow small { grid-column: 1 / -1; font-size: 11px; }
+.revenue-page button.prospect-forecast { height: 30px; padding: 0 10px; font-size: 12px; white-space: nowrap; }
+.prospect-more { display: block; padding: 10px 0; }
+
+/* ---------- 汇总发送 ---------- */
+.warning-digest-dialog { width: min(820px, calc(100% - 32px)); overflow-y: auto; }
+.warning-digest-list { display: grid; gap: 0; max-height: 46dvh; margin: 12px 0; padding: 0; overflow-y: auto; list-style: none; border-block: 1px solid #e3e5e8; }
+.warning-digest-list li { padding: 10px 0; border-bottom: 1px solid #eef0f2; }
+.warning-digest-list li:last-child { border-bottom: 0; }
+.warning-digest-row { display: grid; grid-template-columns: 18px minmax(110px, 1.1fr) minmax(150px, 1.3fr) minmax(120px, 1fr); align-items: center; gap: 12px; font-size: 13px; }
+.warning-digest-row input { width: 16px; height: 16px; margin: 0; }
+.warning-digest-who, .warning-digest-what { display: grid; gap: 2px; min-width: 0; }
+.warning-digest-who small, .warning-digest-what small { color: #686d76; font-size: 12px; overflow-wrap: anywhere; }
+.warning-digest-what small { display: flex; flex-wrap: wrap; gap: 2px 10px; }
+.warning-digest-state { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px 10px; font-size: 12px; text-align: right; }
+.warning-digest-state .text-button { height: auto; padding: 2px 0; font-size: 12px; }
+.warning-digest-list .warning-mail-body { margin: 8px 0 0; max-height: 32dvh; }
+@media (max-width: 700px) {
+  .prospect-follow { grid-template-columns: minmax(0, 1fr); min-width: 150px; }
+  .warning-digest-row { grid-template-columns: 18px minmax(0, 1fr); }
+  .warning-digest-what, .warning-digest-state { grid-column: 2; }
+  .warning-digest-state { justify-content: flex-start; text-align: left; }
+}

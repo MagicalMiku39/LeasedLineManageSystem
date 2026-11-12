@@ -11,6 +11,9 @@ const headerSearchRows = 10;
 const shownIncompleteRows = 20;
 const pageSizes = [50, 100, 200];
 export const strategicSegment = '战客';
+// How far a prospect has been followed up; anything else means not marked yet.
+export const followStatuses = ['contacted', 'paused', 'excluded'];
+const maxFollowNote = 200;
 
 // Column names the full group list may use; the first one found wins.
 const columnAliases = {
@@ -195,6 +198,13 @@ export function ensureGroupDirectory(db) {
     imported_by TEXT,
     imported_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS group_followup (
+    group_code TEXT PRIMARY KEY,
+    status TEXT,
+    note TEXT,
+    updated_by TEXT,
+    updated_at TEXT NOT NULL
+  );
   `);
   if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'leased_line'").get()) {
     db.exec('CREATE INDEX IF NOT EXISTS idx_leased_line_group ON leased_line(group_code)');
@@ -272,6 +282,8 @@ export function createGroupsRouter({ db, leasedLineSource, currentUser, normaliz
                m.name AS ledgerManager, NULLIF(d.manager_name, '') AS directoryManager,
                CASE WHEN m.name IS NOT NULL AND COALESCE(d.manager_name, '') <> '' AND m.name <> d.manager_name THEN 1 ELSE 0 END AS managerMismatch,
                NULLIF(d.group_level, '') AS level, NULLIF(d.segment, '') AS segment, NULLIF(d.key_category, '') AS keyCategory,
+               d.employee_count AS employeeCount, d.mobile_member_count AS mobileMemberCount, d.member_count AS memberCount, d.member_billing AS memberBilling,
+               NULLIF(fu.status, '') AS followStatus, NULLIF(fu.note, '') AS followNote,
                CASE WHEN d.group_code IS NULL THEN 0 ELSE 1 END AS listed,
                CASE WHEN g.code IS NULL THEN 0 ELSE 1 END AS inLedger,
                CASE WHEN ${strategicTest} THEN 1 ELSE 0 END AS strategic,
@@ -281,6 +293,7 @@ export function createGroupsRouter({ db, leasedLineSource, currentUser, normaliz
         LEFT JOIN ledger_groups g ON g.code = c.code
         LEFT JOIN line_totals t ON t.code = c.code
         LEFT JOIN manager_rank m ON m.code = c.code AND m.position = 1
+        LEFT JOIN group_followup fu ON fu.group_code = c.code
       )`;
   }
 
@@ -333,6 +346,116 @@ export function createGroupsRouter({ db, leasedLineSource, currentUser, normaliz
         COALESCE(SUM(CASE WHEN keyCategory IS NOT NULL THEN 1 ELSE 0 END), 0) AS keyCustomers
       FROM unified`).get(...statusParams);
     res.json({ list: lastImport(), strategicFrom: strategicCustomerSource(db).from, summary, total, page, pageSize, rows });
+  });
+
+  /**
+   * 潜客: groups with no line in service. 未开通 has never had a line in the ledger; 已流失 had
+   * lines and all of them are cancelled. Groups marked 已排除 are left out unless asked for.
+   */
+  const prospectTypes = {
+    never: 'inLedger = 0',
+    lost: 'inLedger = 1 AND activeLines = 0 AND cancelledLines > 0'
+  };
+  const notExcluded = "COALESCE(followStatus, '') <> 'excluded'";
+
+  function prospectFilters(query) {
+    const where = [prospectTypes[query.type] || prospectTypes.never];
+    const params = [];
+    const keyword = text(query.search);
+    if (keyword) {
+      const like = `%${keyword.replace(/[\\%_]/g, '\\$&')}%`;
+      where.push("(groupCode LIKE ? ESCAPE '\\' OR groupName LIKE ? ESCAPE '\\' OR managerName LIKE ? ESCAPE '\\')");
+      params.push(like, like, like);
+    }
+    if (query.manager !== undefined && query.manager !== '') {
+      where.push('managerName = ?');
+      params.push(String(query.manager) === '未填写' ? '' : String(query.manager));
+    }
+    const focus = { strategic: 'strategic = 1', key: 'keyCategory IS NOT NULL', a: "level = 'A'" }[query.focus];
+    if (focus) where.push(focus);
+    where.push({ none: 'followStatus IS NULL', contacted: "followStatus = 'contacted'", paused: "followStatus = 'paused'", excluded: "followStatus = 'excluded'" }[query.follow] || notExcluded);
+    return { sql: `WHERE ${where.join(' AND ')}`, params };
+  }
+
+  // Key customers first, then by level and size; a missing figure sorts after every real one.
+  const prospectOrders = {
+    priority: "strategic DESC, (keyCategory IS NOT NULL) DESC, COALESCE(level, 'Z') ASC, (employeeCount IS NULL) ASC, employeeCount DESC, (memberBilling IS NULL) ASC, memberBilling DESC, groupCode ASC",
+    employees: '(employeeCount IS NULL) ASC, employeeCount DESC, groupCode ASC',
+    billing: '(memberBilling IS NULL) ASC, memberBilling DESC, groupCode ASC',
+    cancelled: 'cancelledLines DESC, groupCode ASC'
+  };
+
+  router.get('/prospects', (req, res) => {
+    const cte = unified(leasedLineSource(req.query));
+    const narrowed = prospectFilters(req.query);
+    const order = prospectOrders[req.query.sort] || prospectOrders.priority;
+    const pageSize = pageSizes.includes(Number(req.query.pageSize)) ? Number(req.query.pageSize) : pageSizes[0];
+    const page = Math.max(1, Math.floor(Number(req.query.page)) || 1);
+    const total = db.prepare(`${cte} SELECT COUNT(*) AS count FROM unified ${narrowed.sql}`).get(...statusParams, ...narrowed.params).count;
+    const rows = db.prepare(`${cte} SELECT * FROM unified ${narrowed.sql} ORDER BY ${order} LIMIT ? OFFSET ?`)
+      .all(...statusParams, ...narrowed.params, pageSize, (page - 1) * pageSize).map(view);
+    const sum = (test) => `COALESCE(SUM(CASE WHEN ${test} THEN 1 ELSE 0 END), 0)`;
+    const never = prospectTypes.never;
+    const counts = `${sum(never)} AS never, ${sum(prospectTypes.lost)} AS lost,
+        ${sum(`${never} AND strategic = 1`)} AS neverStrategic, ${sum(`${never} AND keyCategory IS NOT NULL`)} AS neverKey, ${sum(`${never} AND level = 'A'`)} AS neverA`;
+    const summary = db.prepare(`${cte} SELECT ${counts} FROM unified WHERE ${notExcluded}`).get(...statusParams);
+    const managers = db.prepare(`${cte} SELECT COALESCE(NULLIF(managerName, ''), '未填写') AS name, ${counts} FROM unified
+        WHERE ${notExcluded} AND ((${never}) OR (${prospectTypes.lost})) GROUP BY name
+        ORDER BY neverStrategic + neverKey DESC, neverA DESC, never DESC, name ASC`).all(...statusParams);
+    res.json({ list: lastImport(), summary, managers, total, page, pageSize, rows });
+  });
+
+  router.get('/prospects/export', (req, res) => {
+    const narrowed = prospectFilters(req.query);
+    const order = prospectOrders[req.query.sort] || prospectOrders.priority;
+    const rows = db.prepare(`${unified(leasedLineSource(req.query))} SELECT * FROM unified ${narrowed.sql} ORDER BY ${order}`)
+      .all(...statusParams, ...narrowed.params).map(view);
+    const followLabels = { contacted: '已联系', paused: '暂不跟进', excluded: '已排除' };
+    const sheet = XLSX.utils.json_to_sheet(rows.map((row) => ({
+      集团编码: row.groupCode,
+      集团名称: row.groupName,
+      客户经理: row.managerName,
+      类型: row.inLedger ? '已流失' : '未开通',
+      集团级别: row.level ?? '',
+      是否战客: row.strategic ? '是' : '否',
+      客户类别: row.keyCategory ?? '',
+      企业员工数: row.employeeCount ?? '',
+      移动成员数: row.mobileMemberCount ?? '',
+      成员到达数: row.memberCount ?? '',
+      成员出账金额: row.memberBilling ?? '',
+      已销户专线: row.cancelledLines,
+      跟进: followLabels[row.followStatus] || '',
+      备注: row.followNote ?? ''
+    })));
+    for (let index = 1; index <= rows.length; index += 1) {
+      const cell = sheet[XLSX.utils.encode_cell({ r: index, c: 0 })];
+      if (cell) { cell.t = 's'; cell.z = '@'; }
+    }
+    sheet['!cols'] = [{ wch: 14 }, { wch: 40 }, { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 30 }];
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, sheet, '潜客清单');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="prospects.xlsx"; filename*=UTF-8''${encodeURIComponent('潜客清单.xlsx')}`);
+    res.send(XLSX.write(book, { type: 'buffer', bookType: 'xlsx' }));
+  });
+
+  // The follow-up mark belongs to the group code, so it stays when the full list is replaced.
+  router.put('/:code/followup', (req, res) => {
+    const code = String(req.params.code);
+    const status = String(req.body?.status ?? '');
+    const note = String(req.body?.note ?? '').trim();
+    if (status && !followStatuses.includes(status)) return res.status(400).json({ error: '跟进状态不正确' });
+    if (note.length > maxFollowNote) return res.status(400).json({ error: `备注不能超过 ${maxFollowNote} 字` });
+    const known = db.prepare('SELECT 1 FROM group_directory WHERE group_code = ?').get(code)
+      || db.prepare('SELECT 1 FROM leased_line WHERE group_code = ? LIMIT 1').get(code);
+    if (!known) return res.status(404).json({ error: '没有这个集团' });
+    if (!status && !note) db.prepare('DELETE FROM group_followup WHERE group_code = ?').run(code);
+    else {
+      db.prepare(`INSERT INTO group_followup (group_code, status, note, updated_by, updated_at) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(group_code) DO UPDATE SET status = excluded.status, note = excluded.note, updated_by = excluded.updated_by, updated_at = excluded.updated_at`)
+        .run(code, status, note, currentUser(req)?.username || '', new Date().toISOString());
+    }
+    res.json({ groupCode: code, followStatus: status || null, followNote: note || null });
   });
 
   router.get('/export', (req, res) => {

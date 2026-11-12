@@ -1,4 +1,4 @@
-import React, { useEffect, useImperativeHandle, useMemo, useState } from 'react';
+import React, { useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { Check, ListChecks, Pencil, Plus, Trash2, Undo2, UsersRound } from 'lucide-react';
 import { isAbort, jsonBody, requestJson } from './api.js';
 import { InlineError } from './components/Feedback.jsx';
@@ -58,7 +58,7 @@ function useGroupMatches(keyword) {
   return state;
 }
 
-export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup }) {
+export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup, prefill }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -102,6 +102,16 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
     forecastCancelled: sum.forecastCancelled + row.forecastCancelled,
     expectedNet: sum.expectedNet + row.expectedNet
   }), { added: 0, cancelled: 0, net: 0, forecastAdded: 0, forecastCancelled: 0, expectedNet: 0 }), [managerRows]);
+
+  // A group handed over from the prospect list: start a forecast of new lines for it.
+  const formElement = useRef(null);
+  const usedPrefill = useRef(null);
+  useEffect(() => {
+    if (!prefill?.groupCode || usedPrefill.current === prefill || !data) return;
+    usedPrefill.current = prefill;
+    setForm({ ...emptyForm, group_code: prefill.groupCode });
+    formElement.current?.scrollIntoView({ block: 'center' });
+  }, [prefill, data]);
 
   const matches = useGroupMatches(form.group_code);
   const code = form.group_code.trim();
@@ -533,7 +543,7 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
 
       <section className="kpi-panel kpi-wide" aria-label="预计任务">
         <h3>预计任务</h3>
-        <form className="kpi-form" onSubmit={addForecast}>
+        <form className="kpi-form" ref={formElement} onSubmit={addForecast}>
           <h4>填写预计新增或销户</h4>
           <div className="scope-actions kpi-kind" role="group" aria-label="预计类别">
             {Object.entries(kindLabels).map(([kind, label]) => (
