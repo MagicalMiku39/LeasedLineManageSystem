@@ -35,7 +35,7 @@ const hashToken = (token) => crypto.createHash('sha256').update(String(token)).d
  * expires or is revoked. Only the token's hash is stored, so a link cannot be read back out of
  * the database; every write goes through the same code as a signed-in edit and is logged.
  */
-export function createShareService({ db, currentUser, updateLine, kpi, productTypes, logEvent = () => {}, mail = agentMail }) {
+export function createShareService({ db, currentUser, updateLine, kpi, productTypes, logEvent = () => {}, mail = agentMail, linkBase = (fallback) => fallback }) {
   db.exec(`
   CREATE TABLE IF NOT EXISTS share_link (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,7 +82,9 @@ export function createShareService({ db, currentUser, updateLine, kpi, productTy
   adminRouter.get('/', (_req, res) => {
     const links = db.prepare('SELECT * FROM share_link ORDER BY id DESC LIMIT 200').all().map(view);
     const managers = db.prepare("SELECT DISTINCT manager_name AS name FROM leased_line WHERE COALESCE(manager_name, '') <> '' ORDER BY manager_name").all().map((row) => row.name);
-    res.json({ links, managers, emails: Object.fromEntries(managers.map((name) => [name, emailOf(name)]).filter(([, email]) => email)), scopes: Object.entries(shareScopes).map(([key, label]) => ({ key, label })), maxDays });
+    res.json({ links, managers, emails: Object.fromEntries(managers.map((name) => [name, emailOf(name)]).filter(([, email]) => email)), scopes: Object.entries(shareScopes).map(([key, label]) => ({ key, label })), maxDays,
+      // Set while the fill port is on: links then start with the public address.
+      linkBase: linkBase('') });
   });
 
   // The address saved for a manager on the arrears warning page, by job number or by name.
@@ -149,7 +151,7 @@ export function createShareService({ db, currentUser, updateLine, kpi, productTy
       `请通过下面的专属链接填写：${scopes.map((key) => shareScopes[key]).join('、')}。`,
       ...(link.note ? ['', `说明：${link.note}`] : []),
       '',
-      `${origin}/fill/${token}`,
+      `${linkBase(origin)}/fill/${token}`,
       '',
       `有效期至 ${expires}（北京时间），过期后链接失效。`,
       '打开链接不需要登录，只显示您名下的内容，每次保存都会留下记录。',
@@ -361,7 +363,8 @@ export function createShareService({ db, currentUser, updateLine, kpi, productTy
       db.prepare('UPDATE share_link SET sent_to = ?, sent_at = ? WHERE id = ?').run(recipient, new Date().toISOString(), id);
       logEvent('share_created', { username, source, detail: `${link.manager_name} · ${JSON.parse(link.scopes).map((key) => shareScopes[key]).join('、')} · 随${via}发送至 ${recipient}` });
     },
-    scopeLabels: shareScopes
+    scopeLabels: shareScopes,
+    base: (fallback) => linkBase(fallback)
   };
 
   return { adminRouter, publicRouter, forMail };

@@ -12,7 +12,7 @@ const categoryStorageKey = 'ledger-settings-category';
 // The settings page's left-hand menu; each entry shows only its own sections.
 const settingsCategories = [
   { key: 'account', label: '账号与密码', icon: UserRound, description: '修改登录密码。需要当前密码和 Google Authenticator 验证码；修改后其他设备上的登录会退出。' },
-  { key: 'access', label: '访问控制', icon: KeyRound, description: '设备证书：让 IP 不固定的手机安全访问系统，不用逐个开放 IP 白名单。' },
+  { key: 'access', label: '访问控制', icon: KeyRound, description: '设备证书：让 IP 不固定的手机安全访问系统，不用逐个开放 IP 白名单。填报端口：让客户经理在外网打开填报链接。' },
   { key: 'backup', label: '备份与恢复', icon: DatabaseBackup, description: '导入前和每周自动备份整个数据库；导错文件时回退台账类数据、战客清单或全量集团清单，回退也可以撤销。' },
   { key: 'log', label: '安全日志', icon: ScrollText, description: '登录、修改密码、设置页验证码、证书和端口、备份下载与回退的操作记录。' }
 ];
@@ -449,6 +449,92 @@ function CodeDialog({ action, onClose }) {
   );
 }
 
+// 填报端口: the outside port that serves fill links and nothing else.
+function FillPortSection({ reloadKey, onCode }) {
+  const [data, setData] = useState(null);
+  const [draft, setDraft] = useState(null);
+  const [error, setError] = useState('');
+  const [saved, setSaved] = useState('');
+  const [revision, setRevision] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setError('');
+    requestJson('/settings/fill-port', { signal: controller.signal })
+      .then((value) => {
+        setData(value);
+        setDraft({ enabled: value.settings.enabled, port: String(value.settings.port), publicUrl: value.settings.publicUrl });
+      })
+      .catch((err) => { if (!isAbort(err)) setError(`填报端口设置读取失败：${err.message}`); });
+    return () => controller.abort();
+  }, [reloadKey, revision]);
+
+  function save(event) {
+    event.preventDefault();
+    setSaved('');
+    onCode({
+      title: draft.enabled ? `开启填报端口 ${draft.port}` : '关闭填报端口',
+      detail: draft.enabled
+        ? '保存后端口立即开启，无需重启服务。这个端口对外开放，但只提供填报链接的页面。'
+        : '保存后端口立即关闭，外网将打不开填报链接；公司网络内仍可通过系统地址打开。',
+      confirm: '保存',
+      run: async (code) => {
+        await requestJson('/settings/fill-port', jsonBody('PUT', { code, enabled: draft.enabled, port: Number(draft.port), publicUrl: draft.publicUrl.trim() }));
+        setSaved('已保存');
+        setRevision((value) => value + 1);
+      }
+    });
+  }
+
+  const readOnly = Boolean(data?.readOnly);
+  const listener = data?.listener;
+  const status = !data ? null
+    : listener.running ? { text: `运行中，端口 ${listener.port}${listener.secure ? '' : '（当前服务未启用 HTTPS，连接不加密）'}`, className: 'net-positive' }
+      : data.settings.enabled ? { text: `已设为开启但没有运行，请查看服务日志（端口 ${data.settings.port}）`, className: 'net-negative' }
+        : { text: '未开启', className: 'net-zero' };
+
+  return (
+    <Section
+      title="填报端口"
+      description={(
+        <>
+          <p>让客户经理在公司网络外（比如手机上）也能打开填报链接。这个端口对外开放，但上面只有填报页：没有登录页、台账和设置，没有有效链接什么也看不到。</p>
+          <p>防火墙和云平台安全组需要另外放行这个端口，这里改不了。</p>
+        </>
+      )}
+    >
+      <InlineError message={error} onRetry={() => setRevision((value) => value + 1)} />
+      {!data && !error && <p className="subtle settings-first" role="status">正在读取…</p>}
+      {data && draft && (
+        <form onSubmit={save}>
+          <p className="settings-status">当前状态：<span className={status.className}>{status.text}</span></p>
+          <label className={`kpi-mode-toggle settings-toggle${draft.enabled ? ' active' : ''}`}>
+            <span>开启填报端口</span>
+            <input type="checkbox" checked={draft.enabled} disabled={readOnly} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} />
+            <span className="kpi-toggle-track" aria-hidden="true"><span className="kpi-toggle-thumb" /></span>
+          </label>
+          <div className="settings-fields">
+            <label>
+              端口
+              <input type="number" min="1024" max="65535" required disabled={readOnly} value={draft.port} onChange={(event) => setDraft({ ...draft, port: event.target.value })} />
+            </label>
+            <label>
+              对外填报地址
+              <input type="url" required={draft.enabled} disabled={readOnly} placeholder={`https://公网IP或域名:${draft.port || '端口'}`} value={draft.publicUrl} onChange={(event) => setDraft({ ...draft, publicUrl: event.target.value })} />
+            </label>
+          </div>
+          <p className="subtle">开启后，生成的填报链接和邮件里的链接都以“对外填报地址”开头，请填写客户经理在外网能访问到的地址，后面不带路径。</p>
+          <div className="settings-actions">
+            {saved && <span className="subtle" role="status">{saved}</span>}
+            <button type="submit" disabled={readOnly}>保存</button>
+          </div>
+          {readOnly && <p className="subtle">通过设备证书端口登录时只能查看，请从公司网络访问后修改。</p>}
+        </form>
+      )}
+    </Section>
+  );
+}
+
 const emptyPassword = { current: '', next: '', confirm: '', code: '' };
 
 // The signed-in account's password. The current password and the authenticator code are both
@@ -852,6 +938,8 @@ export default function Settings({ refreshToken, username, onDataRestored = () =
               </Section>
             </>
           )}
+
+          {category === 'access' && <FillPortSection reloadKey={`${refreshToken}:${revision}`} onCode={setCodeAction} />}
 
           {data && category === 'backup' && (
             <Section

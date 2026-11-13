@@ -18,6 +18,7 @@ export const securityEventLabels = {
   code_locked: '验证码已锁定',
   ca_created: '创建证书机构',
   port_changed: '修改端口设置',
+  fill_port_changed: '修改填报端口',
   cert_issued: '签发证书',
   cert_revoked: '吊销证书',
   backup_created: '手动备份',

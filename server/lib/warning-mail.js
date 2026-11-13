@@ -216,7 +216,7 @@ export function createWarningMailRouter({ db, leasedLineSource, currentUser, sto
         return { id, ...shown, problem: !report.recipient ? '未设置邮箱' : sent ? '相同内容已发送过' : '' };
       });
       res.json({ asOf: req.body.asOf, cc: reports[0]?.report.cc ?? mail.defaultCc(), withoutManager, managers,
-        fillLink: fillLinks ? { days: digestLinkDays, scopes: digestLinkScopes.map((key) => fillLinks.scopeLabels[key]) } : null });
+        fillLink: fillLinks ? { days: digestLinkDays, scopes: digestLinkScopes.map((key) => fillLinks.scopeLabels[key]), base: fillLinks.base('') } : null });
     } catch (error) { res.status(400).json({ error: error.message }); }
   });
 
@@ -257,7 +257,7 @@ export function createWarningMailRouter({ db, leasedLineSource, currentUser, sto
         report.body,
         '',
         `如需补充台账信息或更新商机进度，可直接打开您的专属填报链接（${digestLinkDays} 天内有效，无需登录，只显示您名下的内容）：`,
-        `${origin}/fill/${made.token}`,
+        `${fillLinks.base(origin)}/fill/${made.token}`,
         '拿到链接的人都能填写，请不要转发；需要在能打开专线台账管理系统的网络内使用。'
       ].join('\n');
     }

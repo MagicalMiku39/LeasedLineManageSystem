@@ -57,7 +57,10 @@ export default function ShareLinks({ ref, refreshToken }) {
   }), [submissions]);
 
   const managers = data ? [...new Set([...defaultManagers.filter((name) => data.managers.includes(name)), ...data.managers])] : [];
-  const url = made ? `${window.location.origin}${made.path}` : '';
+  // While the fill port is on, links start with its public address.
+  const linkBase = data?.linkBase || window.location.origin;
+  const outside = Boolean(data?.linkBase);
+  const url = made ? `${linkBase}${made.path}` : '';
 
   function toggleScope(key) {
     setForm((current) => ({ ...current, scopes: current.scopes.includes(key) ? current.scopes.filter((item) => item !== key) : [...current.scopes, key] }));
@@ -218,7 +221,7 @@ export default function ShareLinks({ ref, refreshToken }) {
               </label>
             ))}
           </fieldset>
-          {mode === 'batch' && <p className="operations-rule share-batch-note">点击后立即发送真实邮件：每位客户经理收到一封只含自己链接的邮件，不抄送其他人。邮件里的链接地址是你现在打开系统用的地址（{window.location.origin}），请确认对方用这个地址也能打开。</p>}
+          {mode === 'batch' && <p className="operations-rule share-batch-note">点击后立即发送真实邮件：每位客户经理收到一封只含自己链接的邮件，不抄送其他人。{outside ? `邮件里的链接以对外填报地址 ${linkBase} 开头，对方在外网也能打开。` : `填报端口没有开启，邮件里的链接地址是你现在打开系统用的地址（${linkBase}），对方需要在能打开这个地址的网络内使用。`}</p>}
           {formError && <p role="alert" className="operations-error">{formError}</p>}
           <div className="kpi-form-actions">
             {mode === 'batch'
@@ -234,7 +237,7 @@ export default function ShareLinks({ ref, refreshToken }) {
               <input readOnly aria-label="填报链接" value={url} onFocus={(event) => event.target.select()} />
               <button type="button" onClick={copy}><Copy size={15} /> {copied ? '已复制' : '复制链接'}</button>
             </div>
-            <p className="operations-rule">链接只在这里显示这一次，系统不保存链接本身，离开页面后无法再查看；丢失了请作废后重新生成。拿到链接的人都能填写，请只发给本人。对方需要在能打开本系统的网络内使用。</p>
+            <p className="operations-rule">链接只在这里显示这一次，系统不保存链接本身，离开页面后无法再查看；丢失了请作废后重新生成。拿到链接的人都能填写，请只发给本人。{outside ? '填报端口已开启，对方在外网也能打开。' : '填报端口没有开启，对方需要在能打开本系统的网络内使用；要让外网也能打开，请到“设置 → 访问控制 → 填报端口”开启。'}</p>
           </div>
         )}
       </section>

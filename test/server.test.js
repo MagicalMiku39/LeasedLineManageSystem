@@ -1872,7 +1872,7 @@ test('the arrears summary can carry the manager\'s own fill link', async (t) => 
   const mine = (data) => data.managers.find((item) => item.manager === '附链经理');
 
   const first = await preview();
-  assert.deepEqual(first.fillLink, { days: 7, scopes: ['台账补充信息', '商机进度'] });
+  assert.deepEqual(first.fillLink, { days: 7, scopes: ['台账补充信息', '商机进度'], base: '' });
   // A bad address makes no link and sends nothing; the preview can still be sent.
   const refused = await send(mine(first).id, { withLink: true, origin: 'not-a-url' });
   assert.equal(refused.status, 400);
@@ -1902,6 +1902,74 @@ test('the arrears summary can carry the manager\'s own fill link', async (t) => 
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM share_link').get().count, 1);
 
   db.exec("DELETE FROM share_link; DELETE FROM warning_mail_digest; DELETE FROM line_warning_mark WHERE line_id IN (SELECT id FROM leased_line WHERE group_product_code LIKE 'DL-%'); DELETE FROM leased_line WHERE group_product_code LIKE 'DL-%'; DELETE FROM warning_mail_contact WHERE manager_key = 'job:DLJ'");
+});
+
+test('the fill port serves fill links and nothing else, and mailed links use its public address', async (t) => {
+  const { agentMail } = await import('../server/lib/agent-mail.js');
+  const sent = [];
+  t.mock.method(agentMail, 'send', async (message) => { sent.push(message); return { queued: true }; });
+  const net = await import('node:net');
+  const freePort = () => new Promise((resolve) => { const probe = net.createServer().listen(0, '127.0.0.1', () => { const { port } = probe.address(); probe.close(() => resolve(port)); }); });
+  const fillPort = serverModule.fillPort;
+  fillPort.configure({ tls: null, host: '127.0.0.1', reservedPorts: [listener.address().port] });
+  const secret = db.prepare('SELECT totp_secret FROM auth_user WHERE username = ?').get('admin').totp_secret;
+  const save = (body) => request('/api/settings/fill-port', { method: 'PUT', body: { code: totp(secret), ...body } });
+  db.prepare(`INSERT INTO leased_line (group_code, group_name, group_product_code, product_name, product_status_name, manager_name, manager_job_no, updated_at)
+    VALUES ('FP001', '端口集团', 'FPL1', '互联网专线', '正常在用', '端口经理', 'FPJ', ?)`).run(nowIso());
+  await request('/api/warnings/mail/contacts', { method: 'PUT', body: { key: 'job:FPJ', email: 'fp@example.com' } });
+
+  // Off by default; changing it needs a login and the authenticator code.
+  const before = await (await request('/api/settings/fill-port')).json();
+  assert.deepEqual([before.settings.enabled, before.listener.running], [false, false]);
+  assert.equal((await request('/api/settings/fill-port', {}, false)).status, 401);
+  const port = await freePort();
+  assert.equal((await request('/api/settings/fill-port', { method: 'PUT', body: { code: '000000', enabled: true, port, publicUrl: 'https://fill.example.com:9443' } })).status, 403);
+  assert.equal((await save({ enabled: true, port: 80, publicUrl: 'https://fill.example.com' })).status, 400);
+  assert.equal((await save({ enabled: true, port: listener.address().port, publicUrl: 'https://fill.example.com' })).status, 400, 'the main port is taken');
+  assert.equal((await save({ enabled: true, port, publicUrl: '' })).status, 400, 'an address is needed to mail links');
+  assert.equal((await save({ enabled: true, port, publicUrl: 'https://fill.example.com/some/path' })).status, 400);
+  assert.equal(fillPort.status().running, false);
+  db.exec("DELETE FROM auth_attempt");
+
+  const opened = await save({ enabled: true, port, publicUrl: 'https://fill.example.com:9443/' });
+  assert.equal(opened.status, 200);
+  assert.deepEqual([(await opened.json()).listener.port, fillPort.readSettings().publicUrl], [port, 'https://fill.example.com:9443']);
+  const outside = (path, options = {}) => fetch(`http://127.0.0.1:${port}${path}`, options);
+
+  // Nothing of the system is on this port: not the pages, not the login, not any other API.
+  for (const path of ['/', '/index.html', '/api/health', '/api/auth/status', '/api/ledger', '/api/share-links', '/api/settings/fill-port', '/api/groups', '/fill/', '/assets/../index.html']) {
+    assert.equal((await outside(path)).status, 404, path);
+  }
+  assert.equal((await outside('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 404);
+  assert.equal((await outside('/api/ledger', { headers: { Cookie: sessionCookie } })).status, 404, 'a real session opens nothing here either');
+  const unknown = await outside('/api/fill/not-a-real-token');
+  assert.deepEqual([unknown.status, unknown.headers.get('referrer-policy'), unknown.headers.get('x-powered-by')], [404, 'no-referrer', null]);
+
+  // A mailed link starts with the public address, and works through the port.
+  const mailed = await request('/api/share-links/send', { method: 'POST', body: { manager: '端口经理', scopes: ['ledger'], days: 3, origin: 'https://10.0.0.5:3443' } });
+  assert.equal(mailed.status, 201);
+  const link = /https:\/\/fill\.example\.com:9443\/fill\/([A-Za-z0-9_-]{43})/.exec(sent[0].body);
+  assert.ok(link, 'the public address, not the one the sender was using');
+  assert.equal((await (await request('/api/share-links')).json()).linkBase, 'https://fill.example.com:9443');
+  const page = await outside(`/api/fill/${link[1]}`);
+  assert.equal(page.status, 200);
+  assert.deepEqual((await page.json()).lines.map((line) => line.group_product_code), ['FPL1']);
+  const lineId = db.prepare("SELECT id FROM leased_line WHERE group_product_code = 'FPL1'").get().id;
+  const filled = await outside(`/api/fill/${link[1]}/lines/${lineId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contract_no: 'FP-1' }) });
+  assert.equal(filled.status, 200);
+  assert.equal(db.prepare('SELECT contract_no FROM leased_line WHERE id = ?').get(lineId).contract_no, 'FP-1');
+  const tooBig = await outside(`/api/fill/${link[1]}/lines/${lineId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remark: 'x'.repeat(100000) }) });
+  assert.equal(tooBig.status, 413);
+  const shell = await outside(`/fill/${link[1]}`);
+  assert.equal([200, 404].includes(shell.status), true, 'the page itself, where the client has been built');
+
+  // Closing it takes effect at once, and links go back to the sender's own address.
+  assert.equal((await save({ enabled: false, port, publicUrl: 'https://fill.example.com:9443' })).status, 200);
+  await assert.rejects(outside('/api/fill/x'));
+  assert.equal((await (await request('/api/share-links')).json()).linkBase, '');
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM security_log WHERE event = 'fill_port_changed'").get().count, 2);
+
+  db.exec("DELETE FROM share_submission; DELETE FROM share_link; DELETE FROM fill_port_settings; DELETE FROM change_log WHERE leased_line_id IN (SELECT id FROM leased_line WHERE group_product_code = 'FPL1'); DELETE FROM leased_line WHERE group_product_code = 'FPL1'; DELETE FROM warning_mail_contact WHERE manager_key = 'job:FPJ'; DELETE FROM auth_attempt");
 });
 
 test('logout invalidates the session cookie', async () => {

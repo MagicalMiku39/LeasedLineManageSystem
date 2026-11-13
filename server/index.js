@@ -29,6 +29,7 @@ import { createKpiRouter } from './lib/kpi.js';
 import { createStrategicRouter } from './lib/strategic.js';
 import { createGroupsRouter } from './lib/groups.js';
 import { createShareService } from './lib/share.js';
+import { createFillPort } from './lib/fill-port.js';
 import { createWorkbenchRouter } from './lib/workbench.js';
 import { clientCertPaths, createClientCertListener, requestSource } from './lib/client-cert.js';
 import { readClientCertSettings } from './lib/client-cert-admin.js';
@@ -109,9 +110,20 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ ok: true });
 });
 
+// A fill link carries its token in the address: keep it out of the Referer sent to other sites.
+app.use(['/fill', '/api/fill'], (_req, res, next) => {
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  next();
+});
+
+// The optional outside port that serves fill links and nothing else.
+const fillPort = createFillPort({ db, distDir });
+
 // Fill links are reached with their token alone, so they sit in front of the login check.
 const shareService = createShareService({
   db,
+  linkBase: fillPort.linkBase,
   currentUser,
   updateLine,
   kpi: () => kpiRouter,
@@ -119,8 +131,15 @@ const shareService = createShareService({
   logEvent: logSecurityEvent
 });
 app.use('/api/fill', shareService.publicRouter);
+fillPort.attach(shareService.publicRouter);
 
 app.use('/api', requireAuth);
+app.use('/api/settings/fill-port', fillPort.createRouter({
+  currentUser,
+  verifyCode: verifyUserCode,
+  logEvent: logSecurityEvent,
+  otherPorts: () => [readClientCertSettings(clientCertFiles).port]
+}));
 app.use('/api/share-links', shareService.adminRouter);
 
 app.post('/api/auth/password', (req, res) => {
@@ -1086,6 +1105,17 @@ app.use((error, req, res, next) => {
   res.status(500).json({ error: `服务器处理出错：${error.message}` });
 });
 
+// Opens the fill port when the saved settings say so. A problem here must not take the main
+// port down: the fill port simply stays closed.
+function startFillPort(tls) {
+  fillPort.configure({ tls, host, reservedPorts: [port, Number(process.env.HTTP_REDIRECT_PORT)].filter(Boolean) });
+  const settings = fillPort.readSettings();
+  if (!settings.enabled) return;
+  fillPort.start(settings.port)
+    .then(() => console.log(`Fill port listening on ${tls ? 'https' : 'http'}://${host}:${settings.port}`))
+    .catch((error) => console.error(`Fill port not started: ${error.message}`));
+}
+
 export function startServer() {
 backups.startWeekly();
 if (httpsEnabled) {
@@ -1110,6 +1140,7 @@ if (httpsEnabled) {
       .then(() => console.log(`Client certificate HTTPS listening on https://${host}:${clientCertSettings.port}`))
       .catch((error) => console.error(`Client certificate port not started: ${error.message}`));
   }
+  startFillPort(httpsOptions);
 
   if (process.env.HTTP_REDIRECT_PORT) {
     const redirectPort = Number(process.env.HTTP_REDIRECT_PORT);
@@ -1123,13 +1154,14 @@ if (httpsEnabled) {
   }
   return server;
 } else {
+  startFillPort(null);
   return app.listen(port, host, () => {
     console.log(`HTTP server listening on http://${host}:${port}`);
   });
 }
 }
 
-export { app };
+export { app, fillPort };
 
 const isMainModule = process.argv[1]
   && import.meta.url === pathToFileURL(process.argv[1]).href;

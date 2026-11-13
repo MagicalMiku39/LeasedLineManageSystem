@@ -153,7 +153,7 @@ export function WarningDigestDialog({ asOf, kpiMode, onClose, onSent, onConfigur
         <input type="checkbox" checked={withLink} disabled={sending} onChange={(event) => setWithLink(event.target.checked)} />
         <span>
           <strong>在邮件末尾附上各自的填报链接</strong>
-          <small>每位客户经理一条专属链接，{data.fillLink.days} 天内有效，可填写{data.fillLink.scopes.join('、')}。链接地址为 {window.location.origin}。汇总邮件会抄送，抄送人也会看到链接。</small>
+          <small>每位客户经理一条专属链接，{data.fillLink.days} 天内有效，可填写{data.fillLink.scopes.join('、')}。{data.fillLink.base ? `链接以对外填报地址 ${data.fillLink.base} 开头，外网也能打开。` : `填报端口没有开启，链接地址为 ${window.location.origin}，只能在能打开这个地址的网络内使用。`}汇总邮件会抄送，抄送人也会看到链接。</small>
         </span>
       </label>
     )}
