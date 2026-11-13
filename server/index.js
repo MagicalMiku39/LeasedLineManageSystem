@@ -1,5 +1,4 @@
 import express from 'express';
-import cors from 'cors';
 import multer from 'multer';
 import http from 'node:http';
 import https from 'node:https';
@@ -29,12 +28,12 @@ import { createKpiRouter } from './lib/kpi.js';
 import { createStrategicRouter } from './lib/strategic.js';
 import { createGroupsRouter } from './lib/groups.js';
 import { createShareService } from './lib/share.js';
-import { createFillPort } from './lib/fill-port.js';
+import { createFillPort, securityHeaders } from './lib/fill-port.js';
 import { createWorkbenchRouter } from './lib/workbench.js';
 import { clientCertPaths, createClientCertListener, requestSource } from './lib/client-cert.js';
 import { readClientCertSettings } from './lib/client-cert-admin.js';
 import { createClientCertRouter } from './lib/client-cert-router.js';
-import { logSecurityEvent, securityLogHandler } from './lib/security-log.js';
+import { logSecurityEvent, securityLogHandler, securitySummaryHandler } from './lib/security-log.js';
 import {
   authStatus,
   changePassword,
@@ -79,7 +78,13 @@ function receiveLedgerFile(req, res, next) {
   });
 }
 
-app.use(cors());
+// This system is only ever used from its own pages: no other site may call it or frame it,
+// and its pages load nothing from anywhere else.
+app.disable('x-powered-by');
+app.use((_req, res, next) => {
+  for (const [name, value] of Object.entries(securityHeaders(httpsEnabled))) res.setHeader(name, value);
+  next();
+});
 app.use(express.json({ limit: '2mb' }));
 
 app.get('/api/auth/status', (req, res) => {
@@ -118,7 +123,7 @@ app.use(['/fill', '/api/fill'], (_req, res, next) => {
 });
 
 // The optional outside port that serves fill links and nothing else.
-const fillPort = createFillPort({ db, distDir });
+const fillPort = createFillPort({ db, distDir, secure: () => httpsEnabled });
 
 // Fill links are reached with their token alone, so they sit in front of the login check.
 const shareService = createShareService({
@@ -1062,6 +1067,7 @@ app.use('/api/settings/client-certs', createClientCertRouter({
   logEvent: logSecurityEvent
 }));
 app.get('/api/settings/security-log', securityLogHandler);
+app.get('/api/settings/security-log/summary', (req, res) => securitySummaryHandler(req, res, currentUser(req)?.username || ''));
 app.use('/api/settings/backups', createBackupRouter({ backups, currentUser, verifyCode: verifyUserCode, logEvent: logSecurityEvent }));
 const kpiRouter = createKpiRouter({
   db,
@@ -1161,7 +1167,7 @@ if (httpsEnabled) {
 }
 }
 
-export { app, fillPort };
+export { app, fillPort, shareService };
 
 const isMainModule = process.argv[1]
   && import.meta.url === pathToFileURL(process.argv[1]).href;

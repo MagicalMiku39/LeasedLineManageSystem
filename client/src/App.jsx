@@ -21,7 +21,11 @@ import ManagerDashboard, { useManagerPerformance } from './ManagerDashboard.jsx'
 import Operations from './Operations.jsx';
 import Settings from './Settings.jsx';
 import { changeSummaryText } from './ledgerChanges.js';
-import { beijingMonth } from './utils.js';
+import { alertSummaryText } from './securityLog.js';
+import { beijingMonth, beijingTime } from './utils.js';
+
+const securitySeenKey = 'ledger-security-seen';
+const settingsCategoryKey = 'ledger-settings-category';
 
 // 台账 has two parts under one menu: the ledger itself and its import history.
 const ledgerSections = [
@@ -46,6 +50,8 @@ function App() {
   const [kpiMode, setKpiMode] = useState(true);
   const [month, setMonth] = useState(() => beijingMonth());
   const [notice, setNotice] = useState(null);
+  // What went wrong since the last login (failed logins, odd use of fill links); hidden once seen.
+  const [securityAlert, setSecurityAlert] = useState(null);
   // An expired session sends the user back to the login form instead of showing stale data.
   const handleUnauthorized = useCallback(() => setAuth({ loading: false, configured: true, user: null, error: '' }), []);
 
@@ -109,6 +115,35 @@ function App() {
     } catch (error) {
       setNotice({ tone: 'error', text: `退出失败：${error.message}` });
     }
+  }
+
+  useEffect(() => {
+    if (!signedIn) {
+      setSecurityAlert(null);
+      return undefined;
+    }
+    let cancelled = false;
+    requestJson('/settings/security-log/summary')
+      .then((summary) => {
+        if (cancelled || !summary.total) return;
+        let seen = 0;
+        try { seen = Number(localStorage.getItem(securitySeenKey)) || 0; } catch { /* Without storage the line simply shows again next time. */ }
+        const text = alertSummaryText(summary, summary.since ? beijingTime(summary.since) : '');
+        if (text && summary.latestId > seen) setSecurityAlert({ text, latestId: summary.latestId });
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [signedIn]);
+
+  function dismissSecurityAlert() {
+    try { localStorage.setItem(securitySeenKey, String(securityAlert?.latestId || 0)); } catch { /* See above. */ }
+    setSecurityAlert(null);
+  }
+
+  function openSecurityLog() {
+    try { localStorage.setItem(settingsCategoryKey, 'log'); } catch { /* The settings page then opens on its first category. */ }
+    dismissSecurityAlert();
+    selectView('settings');
   }
 
   function selectView(view) {
@@ -395,6 +430,10 @@ function App() {
         refreshing={activeView === 'ledger' && ledger.loading}
         refreshTitle={refreshTitles[activeView]}
         onLogout={logout}
+      />
+      <NoticeBar
+        notice={securityAlert && { tone: 'error', text: securityAlert.text, action: { label: '查看安全日志', run: openSecurityLog } }}
+        onClose={dismissSecurityAlert}
       />
       <NoticeBar notice={notice} onClose={() => setNotice(null)} />
 

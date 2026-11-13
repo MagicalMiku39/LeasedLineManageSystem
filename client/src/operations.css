@@ -331,3 +331,4 @@ button.group-link:hover { background: none; box-shadow: none; text-decoration: u
 .warning-digest-link input { width: 16px; height: 16px; margin: 2px 0 0; flex: none; }
 .warning-digest-link span { display: grid; gap: 3px; min-width: 0; }
 .warning-digest-link small { color: #686d76; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.share-sources { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; font-weight: 400; }

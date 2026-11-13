@@ -13,11 +13,27 @@ const publicUrlPattern = /^https?:\/\/[A-Za-z0-9.-]+(:\d{1,5})?$/;
 export class FillPortError extends Error {}
 
 /**
+ * Headers for every response, on both ports: the pages load only their own files, cannot be
+ * framed, and (over HTTPS) the browser keeps to HTTPS from then on.
+ */
+export function securityHeaders(https) {
+  return {
+    'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'same-origin',
+    'Cross-Origin-Opener-Policy': 'same-origin',
+    'Cross-Origin-Resource-Policy': 'same-origin',
+    ...(https ? { 'Strict-Transport-Security': 'max-age=15552000' } : {})
+  };
+}
+
+/**
  * 填报端口: a second port that can be opened to the internet so a manager can use a fill link
  * from anywhere. It serves the fill page and the fill API and nothing else: no login page, no
  * ledger, no settings. The token in a link is still the only key to any data. Off by default.
  */
-export function createFillPort({ db, distDir, limits = defaultConnectionLimits }) {
+export function createFillPort({ db, distDir, limits = defaultConnectionLimits, secure = () => false }) {
   db.exec(`CREATE TABLE IF NOT EXISTS fill_port_settings (
     id INTEGER PRIMARY KEY CHECK(id = 1),
     enabled INTEGER NOT NULL,
@@ -45,10 +61,9 @@ export function createFillPort({ db, distDir, limits = defaultConnectionLimits }
     app.disable('x-powered-by');
     app.use((req, res, next) => {
       // The token is in the address: keep it out of other sites' logs, caches and search engines.
+      for (const [name, value] of Object.entries(securityHeaders(secure()))) res.setHeader(name, value);
       res.setHeader('Referrer-Policy', 'no-referrer');
       res.setHeader('X-Robots-Tag', 'noindex, nofollow');
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.setHeader('X-Frame-Options', 'DENY');
       next();
     });
     app.use('/api/fill', express.json({ limit: '64kb' }), fillRouter);

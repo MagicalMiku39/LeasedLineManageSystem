@@ -254,7 +254,7 @@ export default function ShareLinks({ ref, refreshToken }) {
                   <td className="share-wrap">{link.scopes.map((key) => kindLabels[key]).join('、')}</td>
                   <td><span className={`status-pill share-state-${link.state}`}>{stateLabels[link.state]}</span></td>
                   <td>{beijingTime(link.expiresAt)}</td>
-                  <td className="num">{link.openCount}</td>
+                  <td className="num">{link.openCount}{link.sourceCount > 1 && <small className={`share-sources${link.sourceCount > 3 ? ' operations-error' : ''}`} title="打开过这条链接的不同地址数量；手机换网络会增加，数量多时请留意链接是否被转发">{link.sourceCount} 个地址</small>}</td>
                   <td className="num">{link.submitCount}</td>
                   <td>{link.lastUsedAt ? beijingTime(link.lastUsedAt) : '—'}</td>
                   <td className="share-wrap">{link.sentTo ? `${link.sentTo}（${beijingTime(link.sentAt)}）` : '—'}</td>

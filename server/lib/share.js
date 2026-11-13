@@ -26,6 +26,8 @@ const maxDays = 30;
 const maxText = 200;
 const maxBadTokens = 20;
 const badTokenWindowMs = 15 * 60 * 1000;
+// A link opened from more different addresses than this is flagged.
+const manySources = 3;
 
 const hashToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
 
@@ -61,6 +63,14 @@ export function createShareService({ db, currentUser, updateLine, kpi, productTy
     summary TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_share_submission_link ON share_submission(link_id, id);
+  CREATE TABLE IF NOT EXISTS share_link_source (
+    link_id INTEGER NOT NULL REFERENCES share_link(id),
+    source TEXT NOT NULL,
+    first_at TEXT NOT NULL,
+    last_at TEXT NOT NULL,
+    opens INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (link_id, source)
+  );
   `);
 
   // Links made before they could be sent by mail have no record of a recipient.
@@ -72,7 +82,9 @@ export function createShareService({ db, currentUser, updateLine, kpi, productTy
     id: link.id, manager: link.manager_name, scopes: JSON.parse(link.scopes), note: link.note || '', state: state(link),
     expiresAt: link.expires_at, revokedAt: link.revoked_at, createdBy: link.created_by, createdAt: link.created_at,
     openCount: link.open_count, submitCount: link.submit_count, lastUsedAt: link.last_used_at,
-    sentTo: link.sent_to || '', sentAt: link.sent_at
+    sentTo: link.sent_to || '', sentAt: link.sent_at,
+    // How many different addresses have opened it: many may mean the link was passed on.
+    sourceCount: db.prepare('SELECT COUNT(*) AS count FROM share_link_source WHERE link_id = ?').get(link.id).count
   });
   const actor = (link) => `填报链接·${link.manager_name}`;
 
@@ -205,12 +217,41 @@ export function createShareService({ db, currentUser, updateLine, kpi, productTy
     const entry = badTokens.get(source);
     return Boolean(entry) && entry.until > Date.now() && entry.count >= maxBadTokens;
   }
+  // Counts a wrong token and writes it down; the one that reaches the limit is logged as a block.
   function noteBadToken(source) {
     const now = Date.now();
     for (const [key, entry] of badTokens) if (entry.until <= now) badTokens.delete(key);
-    const entry = badTokens.get(source);
+    let entry = badTokens.get(source);
     if (entry && entry.until > now) entry.count += 1;
-    else badTokens.set(source, { count: 1, until: now + badTokenWindowMs });
+    else badTokens.set(source, entry = { count: 1, until: now + badTokenWindowMs });
+    logEvent('share_bad_token', { source });
+    if (entry.count === maxBadTokens) logEvent('share_blocked', { source, detail: `连续 ${maxBadTokens} 次无效链接，${badTokenWindowMs / 60000} 分钟内不再响应` });
+  }
+
+  // A link that is over may be tried again and again by its own holder: once an hour is enough.
+  const deniedLogged = new Map();
+  function noteDenied(link, source, reason) {
+    const now = Date.now();
+    for (const [key, at] of deniedLogged) if (now - at > 60 * 60 * 1000) deniedLogged.delete(key);
+    const key = `${link.id}|${source}`;
+    if (deniedLogged.has(key)) return;
+    deniedLogged.set(key, now);
+    logEvent('share_denied', { username: actor(link), source, detail: reason });
+  }
+
+  // Remembers each address a link is opened from. The first is routine; a handful is a phone
+  // changing networks; more than that is worth a look.
+  function noteOpened(link, source) {
+    const now = new Date().toISOString();
+    const known = db.prepare('SELECT 1 FROM share_link_source WHERE link_id = ? AND source = ?').get(link.id, source);
+    if (known) {
+      db.prepare('UPDATE share_link_source SET last_at = ?, opens = opens + 1 WHERE link_id = ? AND source = ?').run(now, link.id, source);
+      return;
+    }
+    const earlier = db.prepare('SELECT COUNT(*) AS count FROM share_link_source WHERE link_id = ?').get(link.id).count;
+    db.prepare('INSERT INTO share_link_source (link_id, source, first_at, last_at) VALUES (?, ?, ?, ?)').run(link.id, source, now, now);
+    const event = earlier === 0 ? 'share_opened' : earlier < manySources ? 'share_opened_new' : 'share_opened_many';
+    logEvent(event, { username: actor(link), source, detail: earlier === 0 ? '首次打开' : `从新的地址打开，此前已有 ${earlier} 个不同地址` });
   }
 
   // Resolves the link or answers the request itself. A link that is over says so; an unknown
@@ -229,6 +270,7 @@ export function createShareService({ db, currentUser, updateLine, kpi, productTy
     }
     const current = state(link);
     if (current !== 'active') {
+      noteDenied(link, source, current === 'revoked' ? '使用已作废的链接' : '使用已过期的链接');
       res.status(410).json({ error: current === 'revoked' ? '这个链接已被作废，请联系发给你链接的人' : '这个链接已过期，请联系发给你链接的人重新生成' });
       return null;
     }
@@ -275,6 +317,7 @@ export function createShareService({ db, currentUser, updateLine, kpi, productTy
     const link = linkFor(req, res);
     if (!link) return;
     db.prepare('UPDATE share_link SET open_count = open_count + 1 WHERE id = ?').run(link.id);
+    noteOpened(link, requestSource(req));
     res.json(payload(link));
   });
 
@@ -367,5 +410,11 @@ export function createShareService({ db, currentUser, updateLine, kpi, productTy
     base: (fallback) => linkBase(fallback)
   };
 
-  return { adminRouter, publicRouter, forMail };
+  return {
+    adminRouter,
+    publicRouter,
+    forMail,
+    /** Forgets the wrong-token counts and what was already logged as denied (used by tests). */
+    resetLimits() { badTokens.clear(); deniedLogged.clear(); }
+  };
 }

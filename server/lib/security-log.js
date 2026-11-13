@@ -10,10 +10,10 @@ const maxPageSize = 200;
 const categories = {
   login: ['login_success', 'login_failed', 'login_locked'],
   account: ['password_changed', 'password_change_failed'],
-  code: ['code_failed', 'code_locked'],
+  code: ['code_failed', 'code_locked', 'code_reused'],
   cert: ['ca_created', 'port_changed', 'cert_issued', 'cert_revoked', 'fill_port_changed'],
   backup: ['backup_created', 'backup_downloaded', 'backup_restored'],
-  share: ['share_created', 'share_revoked', 'share_submitted']
+  share: ['share_created', 'share_revoked', 'share_submitted', 'share_opened', 'share_opened_new', 'share_opened_many', 'share_bad_token', 'share_blocked', 'share_denied']
 };
 
 db.exec(`
@@ -72,6 +72,42 @@ export function listSecurityEvents({ category, before, limit } = {}) {
      ORDER BY id DESC LIMIT ?`
   ).all(...params, size + 1);
   return { rows: rows.slice(0, size), hasMore: rows.length > size, retentionDays: securityLogRetentionDays };
+}
+
+// Events that deserve a look: someone failing to get in, or a link being used oddly.
+export const alertEvents = [
+  'login_failed', 'login_locked', 'code_failed', 'code_locked', 'code_reused', 'password_change_failed',
+  'share_bad_token', 'share_blocked', 'share_denied', 'share_opened_many'
+];
+
+/**
+ * The alert events since this user's previous login (the one before the current session), so
+ * signing in shows what happened while they were away. With no earlier login, everything kept.
+ */
+export function securitySummary(username) {
+  const logins = db.prepare("SELECT id, at FROM security_log WHERE event = 'login_success' AND username = ? ORDER BY id DESC LIMIT 2").all(username);
+  const previous = logins[1] ?? null;
+  const items = db.prepare(
+    `SELECT event, COUNT(*) AS count, MAX(id) AS latest FROM security_log
+     WHERE id > ? AND event IN (${alertEvents.map(() => '?').join(', ')}) GROUP BY event`
+  ).all(previous?.id ?? 0, ...alertEvents);
+  const order = new Map(alertEvents.map((event, index) => [event, index]));
+  items.sort((a, b) => order.get(a.event) - order.get(b.event));
+  return {
+    since: previous?.at ?? null,
+    latestId: items.reduce((max, item) => Math.max(max, item.latest), 0),
+    total: items.reduce((sum, item) => sum + item.count, 0),
+    items: items.map(({ event, count }) => ({ event, count }))
+  };
+}
+
+export function securitySummaryHandler(req, res, username) {
+  // Like the log itself, not for a phone on the certificate port.
+  if (requestSource(req).startsWith('cert:')) {
+    res.json({ since: null, latestId: 0, total: 0, items: [] });
+    return;
+  }
+  res.json(securitySummary(username));
 }
 
 // The log names company addresses and devices, so a phone on the certificate port cannot read it.

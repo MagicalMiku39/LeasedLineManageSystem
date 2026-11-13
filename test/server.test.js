@@ -31,6 +31,11 @@ after(async () => {
 });
 
 function totp(secret, time = Date.now()) {
+  db.prepare('UPDATE auth_user SET totp_last_step = NULL').run();
+  return totpRaw(secret, time);
+}
+
+function totpRaw(secret, time = Date.now()) {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
   let bits = '';
   for (const char of secret) bits += alphabet.indexOf(char).toString(2).padStart(5, '0');
@@ -1792,7 +1797,7 @@ test('fill links: one manager fills their own lines and forecasts without an acc
   assert.equal(revoked.status, 410);
   assert.match((await revoked.json()).error, /已被作废/);
 
-  db.exec("DELETE FROM share_submission; DELETE FROM share_link");
+  db.exec("DELETE FROM share_submission; DELETE FROM share_link_source; DELETE FROM share_link");
   db.prepare('DELETE FROM kpi_forecast WHERE id IN (?, ?, ?)').run(myForecast, theirForecast, made.id);
   db.prepare('DELETE FROM change_log WHERE leased_line_id IN (?, ?, ?)').run(mine, cancelled, theirs);
   db.exec("DELETE FROM leased_line WHERE group_product_code LIKE 'SHL%'");
@@ -1854,7 +1859,7 @@ test('fill links by mail: each manager gets their own link, with no copies, and 
   assert.equal(logged.some((detail) => /已邮件发送至 jia@example\.com/.test(detail)), true);
   assert.equal(JSON.stringify(logged).includes(link[1]), false, 'the log never holds a link');
 
-  db.exec("DELETE FROM share_link; DELETE FROM leased_line WHERE group_product_code LIKE 'SML%'; DELETE FROM warning_mail_contact WHERE manager_key IN ('job:SJ1', 'name:邮件经理乙')");
+  db.exec("DELETE FROM share_link_source; DELETE FROM share_link; DELETE FROM leased_line WHERE group_product_code LIKE 'SML%'; DELETE FROM warning_mail_contact WHERE manager_key IN ('job:SJ1', 'name:邮件经理乙')");
 });
 
 test('the arrears summary can carry the manager\'s own fill link', async (t) => {
@@ -1901,7 +1906,7 @@ test('the arrears summary can carry the manager\'s own fill link', async (t) => 
   assert.equal(sent[1].body.includes('/fill/'), false);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM share_link').get().count, 1);
 
-  db.exec("DELETE FROM share_link; DELETE FROM warning_mail_digest; DELETE FROM line_warning_mark WHERE line_id IN (SELECT id FROM leased_line WHERE group_product_code LIKE 'DL-%'); DELETE FROM leased_line WHERE group_product_code LIKE 'DL-%'; DELETE FROM warning_mail_contact WHERE manager_key = 'job:DLJ'");
+  db.exec("DELETE FROM share_link_source; DELETE FROM share_link; DELETE FROM warning_mail_digest; DELETE FROM line_warning_mark WHERE line_id IN (SELECT id FROM leased_line WHERE group_product_code LIKE 'DL-%'); DELETE FROM leased_line WHERE group_product_code LIKE 'DL-%'; DELETE FROM warning_mail_contact WHERE manager_key = 'job:DLJ'");
 });
 
 test('the fill port serves fill links and nothing else, and mailed links use its public address', async (t) => {
@@ -1969,7 +1974,117 @@ test('the fill port serves fill links and nothing else, and mailed links use its
   assert.equal((await (await request('/api/share-links')).json()).linkBase, '');
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM security_log WHERE event = 'fill_port_changed'").get().count, 2);
 
-  db.exec("DELETE FROM share_submission; DELETE FROM share_link; DELETE FROM fill_port_settings; DELETE FROM change_log WHERE leased_line_id IN (SELECT id FROM leased_line WHERE group_product_code = 'FPL1'); DELETE FROM leased_line WHERE group_product_code = 'FPL1'; DELETE FROM warning_mail_contact WHERE manager_key = 'job:FPJ'; DELETE FROM auth_attempt");
+  db.exec("DELETE FROM share_submission; DELETE FROM share_link_source; DELETE FROM share_link; DELETE FROM fill_port_settings; DELETE FROM change_log WHERE leased_line_id IN (SELECT id FROM leased_line WHERE group_product_code = 'FPL1'); DELETE FROM leased_line WHERE group_product_code = 'FPL1'; DELETE FROM warning_mail_contact WHERE manager_key = 'job:FPJ'; DELETE FROM auth_attempt");
+});
+
+test('an authenticator code works once: a second use is refused everywhere and logged', async () => {
+  const secret = db.prepare('SELECT totp_secret FROM auth_user WHERE username = ?').get('admin').totp_secret;
+  db.prepare('UPDATE auth_user SET totp_last_step = NULL').run();
+  const code = totpRaw(secret);
+  // Used to sign in...
+  assert.equal(Boolean(auth.loginAuth({ username: 'admin', password: 'password1', code }, 'ip:10.7.0.1').cookie), true);
+  // ...it cannot sign in again, confirm a setting, or change the password.
+  assert.throws(() => auth.loginAuth({ username: 'admin', password: 'password1', code }, 'ip:10.7.0.2'), /这个验证码已经用过/);
+  assert.throws(() => auth.verifyUserCode('admin', code, 'ip:10.7.0.2'), (error) => error.status === 403 && /已经用过/.test(error.message));
+  const settings = await request('/api/settings/fill-port', { method: 'PUT', body: { code, enabled: false, port: 9443, publicUrl: '' } });
+  assert.equal(settings.status, 403);
+  assert.match((await settings.json()).error, /已经用过/);
+  const password = await request('/api/auth/password', { method: 'POST', body: { currentPassword: 'password1', newPassword: 'password9', code } });
+  assert.match((await password.json()).error, /已经用过/);
+  assert.equal(Boolean(auth.loginAuth({ username: 'admin', password: 'password1', code: totp(secret) }, 'ip:10.7.0.3').cookie), true, 'the password did not change');
+  // An older code is refused once a newer one has been used.
+  db.prepare('UPDATE auth_user SET totp_last_step = NULL').run();
+  assert.equal(auth.verifyUserCode('admin', totpRaw(secret), 'ip:10.7.0.4'), true);
+  assert.throws(() => auth.verifyUserCode('admin', totpRaw(secret, Date.now() - 30000), 'ip:10.7.0.4'), /已经用过/);
+  // A reused code is not a wrong one: it does not count towards the lockout, and a wrong
+  // password never uses the code up.
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM auth_attempt WHERE attempt_key LIKE '%10.7.0.%'").get().count, 0);
+  db.prepare('UPDATE auth_user SET totp_last_step = NULL').run();
+  const fresh = totpRaw(secret);
+  assert.throws(() => auth.loginAuth({ username: 'admin', password: 'wrong-password', code: fresh }, 'ip:10.7.0.5'), /账号、密码或验证码错误/);
+  assert.equal(Boolean(auth.loginAuth({ username: 'admin', password: 'password1', code: fresh }, 'ip:10.7.0.5').cookie), true);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM security_log WHERE event = 'code_reused'").get().count >= 4, true);
+  db.exec("DELETE FROM auth_attempt");
+});
+
+test('every response carries the security headers and no other site may call the API', async () => {
+  for (const path of ['/api/health', '/api/auth/status', '/api/ledger?page=1', '/api/fill/none']) {
+    const response = await request(path);
+    assert.match(response.headers.get('content-security-policy'), /default-src 'self'.*frame-ancestors 'none'/, path);
+    assert.equal(response.headers.get('x-frame-options'), 'DENY', path);
+    assert.equal(response.headers.get('x-content-type-options'), 'nosniff', path);
+    assert.equal(response.headers.get('x-powered-by'), null, path);
+    assert.equal(response.headers.get('access-control-allow-origin'), null, path);
+  }
+  assert.equal((await request('/api/ledger?page=1')).headers.get('referrer-policy'), 'same-origin');
+  assert.equal((await request('/api/fill/none')).headers.get('referrer-policy'), 'no-referrer');
+  // A browser's cross-site preflight gets no permission to go on.
+  const preflight = await request('/api/ledger', { method: 'OPTIONS', headers: { Origin: 'https://evil.example', 'Access-Control-Request-Method': 'PATCH' } });
+  assert.equal(preflight.headers.get('access-control-allow-origin'), null);
+  assert.equal(preflight.headers.get('access-control-allow-methods'), null);
+  const { securityHeaders } = await import('../server/lib/fill-port.js');
+  assert.equal(securityHeaders(true)['Strict-Transport-Security'], 'max-age=15552000');
+  assert.equal(securityHeaders(false)['Strict-Transport-Security'], undefined);
+  db.exec("DELETE FROM security_log WHERE event = 'share_bad_token'");
+});
+
+test('odd use of fill links is logged, and the next login is told what happened', async () => {
+  db.exec("DELETE FROM security_log WHERE event LIKE 'share_%'");
+  const secret = db.prepare('SELECT totp_secret FROM auth_user WHERE username = ?').get('admin').totp_secret;
+  // The login that the summary counts from, and the one doing the looking.
+  auth.loginAuth({ username: 'admin', password: 'password1', code: totp(secret) }, 'ip:10.8.0.1');
+  const events = (name) => db.prepare('SELECT source, username, detail FROM security_log WHERE event = ? ORDER BY id').all(name).map((row) => ({ ...row }));
+  db.prepare(`INSERT INTO leased_line (group_code, group_name, group_product_code, product_name, product_status_name, manager_name, updated_at)
+    VALUES ('AU001', '审计集团', 'AUL1', '互联网专线', '正常在用', '审计经理', ?)`).run(nowIso());
+  const made = await (await request('/api/share-links', { method: 'POST', body: { manager: '审计经理', scopes: ['ledger'], days: 3 } })).json();
+  const token = made.path.slice(6);
+  const openFrom = (ip) => { db.prepare('UPDATE share_link_source SET source = ? WHERE link_id = ? AND source LIKE ?').run(`ip:${ip}`, made.id, 'ip:%127.0.0.1'); return request(`/api/fill/${token}`, {}, false); };
+
+  // The first address is routine, a few more are noted, more than that is flagged.
+  await request(`/api/fill/${token}`, {}, false);
+  await request(`/api/fill/${token}`, {}, false);
+  assert.deepEqual(events('share_opened').map((row) => [row.username, row.detail]), [['填报链接·审计经理', '首次打开']]);
+  await openFrom('10.1.1.1');
+  await openFrom('10.1.1.2');
+  assert.equal(events('share_opened_new').length, 2);
+  assert.equal(events('share_opened_many').length, 0);
+  await openFrom('10.1.1.3');
+  assert.deepEqual(events('share_opened_many').map((row) => row.detail), ['从新的地址打开，此前已有 3 个不同地址']);
+  assert.equal((await (await request('/api/share-links')).json()).links.find((link) => link.id === made.id).sourceCount, 4);
+
+  // An expired link being tried is logged once, not on every click.
+  db.prepare('UPDATE share_link SET expires_at = ? WHERE id = ?').run(new Date(Date.now() - 1000).toISOString(), made.id);
+  for (let index = 0; index < 3; index += 1) assert.equal((await request(`/api/fill/${token}`, {}, false)).status, 410);
+  assert.deepEqual(events('share_denied').map((row) => row.detail), ['使用已过期的链接']);
+
+  // Wrong tokens are each on record, and the one that trips the limit is logged as a block.
+  serverModule.shareService.resetLimits();
+  db.exec("DELETE FROM security_log WHERE event IN ('share_bad_token', 'share_blocked')");
+  let statuses = [];
+  for (let index = 0; index < 22; index += 1) statuses.push((await request(`/api/fill/wrong-token-${index}`, {}, false)).status);
+  assert.deepEqual([statuses.filter((status) => status === 404).length, statuses.filter((status) => status === 429).length], [20, 2]);
+  assert.equal(events('share_bad_token').length, 20);
+  assert.equal(events('share_blocked').length, 1);
+  assert.match(events('share_blocked')[0].detail, /连续 20 次无效链接，15 分钟内不再响应/);
+  assert.equal(JSON.stringify(db.prepare("SELECT * FROM security_log WHERE event LIKE 'share_%'").all()).includes(token), false, 'no token in the log');
+
+  // Signing in again shows what happened since the login before.
+  auth.loginAuth({ username: 'admin', password: 'password1', code: totp(secret) }, 'ip:10.8.0.1');
+  assert.equal((await request('/api/settings/security-log/summary', {}, false)).status, 401);
+  const summary = await (await request('/api/settings/security-log/summary')).json();
+  const counts = Object.fromEntries(summary.items.map((item) => [item.event, item.count]));
+  assert.deepEqual([counts.share_bad_token, counts.share_blocked, counts.share_denied, counts.share_opened_many, counts.share_opened], [20, 1, 1, 1, undefined]);
+  assert.equal(summary.total >= 23, true);
+  assert.ok(summary.since && summary.latestId > 0);
+  // After one more login with nothing in between, there is nothing to report.
+  auth.loginAuth({ username: 'admin', password: 'password1', code: totp(secret) }, 'ip:10.8.0.1');
+  auth.loginAuth({ username: 'admin', password: 'password1', code: totp(secret) }, 'ip:10.8.0.1');
+  assert.deepEqual((await (await request('/api/settings/security-log/summary')).json()).items, []);
+  const log = await (await request('/api/settings/security-log?category=share')).json();
+  assert.equal(log.rows.some((row) => row.event === 'share_blocked'), true);
+
+  serverModule.shareService.resetLimits();
+  db.exec("DELETE FROM share_link_source; DELETE FROM share_link; DELETE FROM leased_line WHERE group_product_code = 'AUL1'; DELETE FROM auth_attempt");
 });
 
 test('logout invalidates the session cookie', async () => {

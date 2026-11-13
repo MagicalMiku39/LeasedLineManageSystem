@@ -34,7 +34,13 @@ CREATE TABLE IF NOT EXISTS auth_attempt (
 );
 `);
 
+// Accounts from before codes were single-use have no record of the last one used.
+if (!db.prepare("SELECT 1 FROM pragma_table_info('auth_user') WHERE name = 'totp_last_step'").get()) {
+  db.exec('ALTER TABLE auth_user ADD COLUMN totp_last_step INTEGER');
+}
+
 const maxFailures = 5;
+const codeUsedMessage = '这个验证码已经用过，请等 Google Authenticator 显示下一个验证码后再输入';
 const lockMinutes = 15;
 const lockMs = lockMinutes * 60 * 1000;
 // Compared against when the account does not exist, so its absence takes just as long to report.
@@ -134,14 +140,28 @@ function hotp(secret, counter) {
   return String(code % 1000000).padStart(6, '0');
 }
 
-function verifyTotp(secret, code) {
+// The 30-second step a code belongs to, or null when it matches none near now.
+function totpStep(secret, code) {
   const cleanCode = String(code || '').replace(/\s/g, '');
-  if (!/^\d{6}$/.test(cleanCode)) return false;
+  if (!/^\d{6}$/.test(cleanCode)) return null;
   const counter = Math.floor(Date.now() / 1000 / 30);
+  let found = null;
   for (let drift = -1; drift <= 1; drift += 1) {
-    if (timingSafeEqualText(hotp(secret, counter + drift), cleanCode)) return true;
+    if (timingSafeEqualText(hotp(secret, counter + drift), cleanCode)) found = counter + drift;
   }
-  return false;
+  return found;
+}
+
+/**
+ * Checks a code and uses it up: 'ok', 'wrong', or 'used' when this code (or a later one) has
+ * already been accepted. A code seen once, over a shoulder or on a recording, is then worthless.
+ */
+function consumeCode(user, code) {
+  const step = totpStep(user.totp_secret, code);
+  if (step === null) return 'wrong';
+  if (user.totp_last_step !== null && user.totp_last_step !== undefined && step <= user.totp_last_step) return 'used';
+  db.prepare('UPDATE auth_user SET totp_last_step = ? WHERE id = ?').run(step, user.id);
+  return 'ok';
 }
 
 function getCookie(req, name) {
@@ -185,7 +205,14 @@ export function loginAuth({ username, password, code }, source = '') {
   assertNotLocked(key);
   const user = db.prepare('SELECT * FROM auth_user WHERE username = ?').get(String(username || '').trim());
   const { hash } = hashPassword(password || '', user?.password_salt || unknownUserSalt);
-  if (!user || !timingSafeEqualText(hash, user.password_hash) || !verifyTotp(user.totp_secret, code)) {
+  const passwordRight = Boolean(user) && timingSafeEqualText(hash, user.password_hash);
+  // The code is only used up once the password is right.
+  const codeResult = passwordRight ? consumeCode(user, code) : 'wrong';
+  if (codeResult === 'used') {
+    logSecurityEvent('code_reused', { username: user.username, source, detail: '登录' });
+    throw new Error(codeUsedMessage);
+  }
+  if (codeResult !== 'ok') {
     const locked = recordFailure(key);
     // An unknown name is not written down: people sometimes type their password in that box.
     const entry = { username: user?.username || '', source, detail: user ? '' : '账号不存在' };
@@ -213,8 +240,13 @@ export function loginAuth({ username, password, code }, source = '') {
 export function verifyUserCode(username, code, source = '') {
   const key = attemptKey(username, source);
   assertNotLocked(key);
-  const user = db.prepare('SELECT totp_secret FROM auth_user WHERE username = ?').get(String(username || ''));
-  if (!user || !verifyTotp(user.totp_secret, code)) {
+  const user = db.prepare('SELECT id, totp_secret, totp_last_step FROM auth_user WHERE username = ?').get(String(username || ''));
+  const result = user ? consumeCode(user, code) : 'wrong';
+  if (result === 'used') {
+    logSecurityEvent('code_reused', { username: String(username || ''), source });
+    throw Object.assign(new Error(codeUsedMessage), { status: 403 });
+  }
+  if (result !== 'ok') {
     const locked = recordFailure(key);
     logSecurityEvent('code_failed', { username: String(username || ''), source });
     if (locked) logSecurityEvent('code_locked', { username: String(username || ''), source, detail: `连续错误 ${maxFailures} 次，锁定 ${lockMinutes} 分钟` });
@@ -239,7 +271,16 @@ export function changePassword(req, { currentPassword, newPassword, code } = {},
   assertNotLocked(key);
   const user = db.prepare('SELECT * FROM auth_user WHERE username = ?').get(session.username);
   const { hash } = hashPassword(String(currentPassword ?? ''), user.password_salt);
-  if (!timingSafeEqualText(hash, user.password_hash) || !verifyTotp(user.totp_secret, code)) {
+  const currentRight = timingSafeEqualText(hash, user.password_hash);
+  if (currentRight && String(newPassword ?? '') === String(currentPassword ?? '')) {
+    throw Object.assign(new Error('新密码不能与当前密码相同'), { status: 400 });
+  }
+  const codeResult = currentRight ? consumeCode(user, code) : 'wrong';
+  if (codeResult === 'used') {
+    logSecurityEvent('code_reused', { username: user.username, source, detail: '修改密码' });
+    throw Object.assign(new Error(codeUsedMessage), { status: 400 });
+  }
+  if (codeResult !== 'ok') {
     const locked = recordFailure(key);
     logSecurityEvent('password_change_failed', { username: user.username, source });
     if (locked) logSecurityEvent('login_locked', { username: user.username, source, detail: `连续错误 ${maxFailures} 次，锁定 ${lockMinutes} 分钟` });
