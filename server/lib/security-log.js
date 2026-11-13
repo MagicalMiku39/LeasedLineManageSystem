@@ -12,7 +12,8 @@ const categories = {
   account: ['password_changed', 'password_change_failed'],
   code: ['code_failed', 'code_locked'],
   cert: ['ca_created', 'port_changed', 'cert_issued', 'cert_revoked'],
-  backup: ['backup_created', 'backup_downloaded', 'backup_restored']
+  backup: ['backup_created', 'backup_downloaded', 'backup_restored'],
+  share: ['share_created', 'share_revoked', 'share_submitted']
 };
 
 db.exec(`

@@ -24,14 +24,14 @@ export function warningLevel(days) {
   return 'green';
 }
 
-export function createWarningsRouter({ db, leasedLineSource, currentUser }) {
+export function createWarningsRouter({ db, leasedLineSource, currentUser, fillLinks }) {
   const router = Router();
   db.exec(`CREATE TABLE IF NOT EXISTS line_warning_mark (
     line_id INTEGER PRIMARY KEY REFERENCES leased_line(id) ON DELETE CASCADE,
     mark TEXT NOT NULL CHECK(mark IN ('remind', 'ignore')),
     updated_by TEXT, updated_at TEXT NOT NULL
   )`);
-  router.use(createWarningMailRouter({ db, leasedLineSource, currentUser, stoppedDays, warningLevel }));
+  router.use(createWarningMailRouter({ db, leasedLineSource, currentUser, stoppedDays, warningLevel, fillLinks }));
   router.get('/', (req, res) => {
     const asOf = String(req.query.asOf ?? new Intl.DateTimeFormat('sv-SE', {
       timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit'

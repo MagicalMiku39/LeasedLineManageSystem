@@ -60,7 +60,7 @@ function ChangeLog({ logs, error, loading }) {
         <div className="log-item" key={log.id}>
           <div>
             <strong>{fieldLabels[log.field_name] || log.field_name}</strong>
-            <span>{log.change_source === 'batch' ? '批量编辑' : '手动编辑'} · {log.changed_by || 'admin'}</span>
+            <span>{log.change_source === 'batch' ? '批量编辑' : log.change_source === 'share' ? '链接填报' : '手动编辑'} · {log.changed_by || 'admin'}</span>
           </div>
           <p>
             <em>{log.old_value || '空'}</em>

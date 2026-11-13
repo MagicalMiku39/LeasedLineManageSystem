@@ -1704,6 +1704,206 @@ test('arrears summary mail: one message per manager, sent by hand, marks its lin
   db.exec("DELETE FROM line_warning_mark WHERE line_id IN (SELECT id FROM leased_line WHERE group_product_code LIKE 'DG-%'); DELETE FROM leased_line WHERE group_product_code LIKE 'DG-%'; DELETE FROM warning_mail_digest; DELETE FROM warning_mail_contact WHERE manager_key = 'job:DJ1'");
 });
 
+test('fill links: one manager fills their own lines and forecasts without an account, within limits, all logged', async () => {
+  const insert = db.prepare(`INSERT INTO leased_line (group_code, group_name, group_product_code, product_name, product_status_name, ledger_status, manager_name, start_time, updated_at)
+    VALUES (?, ?, ?, '互联网专线', ?, ?, ?, '2025-01-01', ?)`);
+  const mine = Number(insert.run('SH001', '填报集团', 'SHL1', '正常在用', '正常在用', '填报经理', nowIso()).lastInsertRowid);
+  const cancelled = Number(insert.run('SH001', '填报集团', 'SHL2', '正式销户', '正式销户', '填报经理', nowIso()).lastInsertRowid);
+  const theirs = Number(insert.run('SH002', '别人的集团', 'SHL3', '正常在用', '正常在用', '别的经理', nowIso()).lastInsertRowid);
+  const now = new Date(Date.now() + 8 * 3600 * 1000);
+  const forecastBody = { product_type: '互联网专线', kind: 'added', year: now.getUTCFullYear(), month: now.getUTCMonth() + 1, line_count: 3, confidence: 'likely' };
+  const myForecast = (await (await request('/api/kpi/forecasts', { method: 'POST', body: { ...forecastBody, group_code: 'SH001' } })).json()).id;
+  const theirForecast = (await (await request('/api/kpi/forecasts', { method: 'POST', body: { ...forecastBody, group_code: 'SH002' } })).json()).id;
+
+  // Making a link needs a login; the link itself is then used with no session at all.
+  assert.equal((await request('/api/share-links', { method: 'POST', body: { manager: '填报经理', scopes: ['ledger'], days: 3 } }, false)).status, 401);
+  assert.equal((await request('/api/share-links', { method: 'POST', body: { manager: '', scopes: ['ledger'], days: 3 } })).status, 400);
+  assert.equal((await request('/api/share-links', { method: 'POST', body: { manager: '填报经理', scopes: ['nonsense'], days: 3 } })).status, 400);
+  assert.equal((await request('/api/share-links', { method: 'POST', body: { manager: '填报经理', scopes: ['ledger'], days: 99 } })).status, 400);
+  const make = async (scopes, days = 3) => (await request('/api/share-links', { method: 'POST', body: { manager: '填报经理', scopes, days, note: '请本周内填完' } })).json();
+  const full = await make(['ledger', 'progress', 'report']);
+  assert.match(full.path, /^\/fill\/[A-Za-z0-9_-]{43}$/);
+  const token = full.path.slice('/fill/'.length);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM share_link WHERE token_hash = ?').get(token).count, 0, 'the token itself is not stored');
+  const open = (path = '', options = {}) => request(`/api/fill/${token}${path}`, options, false);
+
+  const page = await (await open()).json();
+  assert.deepEqual([page.manager, page.note, page.scopes], ['填报经理', '请本周内填完', ['ledger', 'progress', 'report']]);
+  // Only this manager's lines in service, and only this manager's forecasts.
+  assert.deepEqual(page.lines.map((line) => line.group_product_code), ['SHL1']);
+  assert.deepEqual(page.forecasts.map((item) => item.id), [myForecast]);
+  assert.equal(JSON.stringify(page).includes('别人的集团'), false);
+  assert.equal((await request('/api/fill/not-a-real-token', {}, false)).status, 404);
+
+  const edit = (id, body, tokenPath = '') => open(`${tokenPath}/lines/${id}`, { method: 'POST', body });
+  const saved = await edit(mine, { contract_no: 'HT-2026-001', actual_monthly_fee: '1200', customer_contact: '王工', product_status_name: '正式销户', manager_name: '别的经理' });
+  assert.equal(saved.status, 200);
+  const after = db.prepare('SELECT contract_no, actual_monthly_fee, customer_contact, product_status_name, manager_name FROM leased_line WHERE id = ?').get(mine);
+  // Fields outside the allowed ones are ignored, whatever the request carries.
+  assert.deepEqual({ ...after }, { contract_no: 'HT-2026-001', actual_monthly_fee: 1200, customer_contact: '王工', product_status_name: '正常在用', manager_name: '填报经理' });
+  const logged = db.prepare("SELECT field_name, changed_by, change_source FROM change_log WHERE leased_line_id = ? ORDER BY id").all(mine);
+  assert.deepEqual(logged.map((row) => [row.field_name, row.changed_by, row.change_source]).sort(), [
+    ['actual_monthly_fee', '填报链接·填报经理', 'share'], ['contract_no', '填报链接·填报经理', 'share'], ['customer_contact', '填报链接·填报经理', 'share']
+  ]);
+  assert.equal((await edit(theirs, { contract_no: 'X' })).status, 404, 'another manager\'s line');
+  assert.equal(db.prepare('SELECT contract_no FROM leased_line WHERE id = ?').get(theirs).contract_no, null);
+  assert.equal((await edit(mine, { contract_start_date: '明天' })).status, 400);
+  assert.equal((await edit(mine, { actual_monthly_fee: '-5' })).status, 400);
+  assert.equal((await edit(mine, { remark: 'x'.repeat(201) })).status, 400);
+
+  const progress = (id, body) => open(`/forecasts/${id}/progress`, { method: 'POST', body });
+  assert.equal((await progress(myForecast, { note: '客户已签合同', landed_count: 1 })).status, 201);
+  assert.equal((await progress(myForecast, { note: '' })).status, 400);
+  assert.equal((await progress(theirForecast, { note: '不该写进去' })).status, 404);
+  const entry = db.prepare('SELECT note, landed_count, created_by FROM kpi_forecast_progress WHERE forecast_id = ? ORDER BY id DESC LIMIT 1').get(myForecast);
+  assert.deepEqual({ ...entry }, { note: '客户已签合同', landed_count: 1, created_by: '填报链接·填报经理' });
+
+  // A new forecast is always this manager's, whoever the group's own manager is.
+  const reported = await open('/forecasts', { method: 'POST', body: { ...forecastBody, group_code: 'SH002', manager_name: '别的经理', line_count: 2 } });
+  assert.equal(reported.status, 201);
+  const made = await reported.json();
+  assert.deepEqual([made.manager_name, made.group_name, made.created_by], ['填报经理', '别人的集团', '填报链接·填报经理']);
+  assert.deepEqual((await (await open(`/groups?q=${encodeURIComponent('填报集')}`)).json()).map((row) => row.group_code), ['SH001']);
+
+  // A link carries only what it was made for.
+  const ledgerOnly = (await make(['ledger'])).path.slice(6);
+  assert.equal((await request(`/api/fill/${ledgerOnly}/forecasts`, { method: 'POST', body: { ...forecastBody, group_code: 'SH001' } }, false)).status, 403);
+  assert.equal((await request(`/api/fill/${ledgerOnly}/forecasts/${myForecast}/progress`, { method: 'POST', body: { note: 'x' } }, false)).status, 403);
+  assert.deepEqual((await (await request(`/api/fill/${ledgerOnly}`, {}, false)).json()).forecasts, []);
+
+  // Everything written through the link is on record.
+  const submissions = await (await request(`/api/share-links/submissions?link=${full.id}`)).json();
+  assert.deepEqual(submissions.map((row) => row.kind).sort(), ['ledger', 'progress', 'report']);
+  assert.match(submissions.find((row) => row.kind === 'ledger').summary, /SHL1.*合同编号 空 → HT-2026-001/);
+  const listed = (await (await request('/api/share-links')).json()).links.find((item) => item.id === full.id);
+  assert.deepEqual([listed.state, listed.submitCount, listed.openCount >= 1, listed.path], ['active', 3, true, undefined]);
+  const events = db.prepare("SELECT event FROM security_log WHERE event LIKE 'share_%'").all().map((row) => row.event);
+  assert.equal(events.filter((event) => event === 'share_submitted').length, 3);
+  assert.equal(events.includes('share_created'), true);
+
+  // Expired and revoked links stop working, for reading and for writing.
+  db.prepare('UPDATE share_link SET expires_at = ? WHERE id = ?').run(new Date(Date.now() - 1000).toISOString(), full.id);
+  assert.equal((await open()).status, 410);
+  assert.equal((await edit(mine, { contract_no: 'LATE' })).status, 410);
+  assert.equal(db.prepare('SELECT contract_no FROM leased_line WHERE id = ?').get(mine).contract_no, 'HT-2026-001');
+  const other = await make(['ledger']);
+  assert.equal((await request(`/api/share-links/${other.id}/revoke`, { method: 'POST' })).status, 200);
+  const revoked = await request(`/api/fill/${other.path.slice(6)}`, {}, false);
+  assert.equal(revoked.status, 410);
+  assert.match((await revoked.json()).error, /已被作废/);
+
+  db.exec("DELETE FROM share_submission; DELETE FROM share_link");
+  db.prepare('DELETE FROM kpi_forecast WHERE id IN (?, ?, ?)').run(myForecast, theirForecast, made.id);
+  db.prepare('DELETE FROM change_log WHERE leased_line_id IN (?, ?, ?)').run(mine, cancelled, theirs);
+  db.exec("DELETE FROM leased_line WHERE group_product_code LIKE 'SHL%'");
+});
+
+test('fill links by mail: each manager gets their own link, with no copies, and failures leave no stray link', async (t) => {
+  const { agentMail } = await import('../server/lib/agent-mail.js');
+  const sent = [];
+  let failure = null;
+  t.mock.method(agentMail, 'defaultCc', () => ['audit@example.com']);
+  t.mock.method(agentMail, 'send', async (message) => { if (failure) throw failure; sent.push(message); return { queued: true }; });
+  const insert = db.prepare(`INSERT INTO leased_line (group_code, group_name, group_product_code, product_name, product_status_name, manager_name, manager_job_no, updated_at)
+    VALUES ('SM001', '邮件集团', ?, '互联网专线', '正常在用', ?, ?, ?)`);
+  insert.run('SML1', '邮件经理甲', 'SJ1', nowIso());
+  insert.run('SML2', '邮件经理乙', '', nowIso());
+  insert.run('SML3', '没邮箱经理乙', 'SJ3', nowIso());
+  await request('/api/warnings/mail/contacts', { method: 'PUT', body: { key: 'job:SJ1', email: 'jia@example.com' } });
+  await request('/api/warnings/mail/contacts', { method: 'PUT', body: { key: 'name:邮件经理乙', email: 'yi@example.com' } });
+
+  const listed = await (await request('/api/share-links')).json();
+  assert.deepEqual([listed.emails['邮件经理甲'], listed.emails['邮件经理乙'], listed.emails['没邮箱经理乙']], ['jia@example.com', 'yi@example.com', undefined]);
+
+  const send = (manager, extra = {}) => request('/api/share-links/send', { method: 'POST', body: { manager, scopes: ['ledger', 'progress'], days: 7, note: '请周五前填完', origin: 'https://ledger.example.com:3443', ...extra } });
+  assert.equal((await request('/api/share-links/send', { method: 'POST', body: { manager: '邮件经理甲', scopes: ['ledger'], days: 7, origin: 'https://x' } }, false)).status, 401);
+  assert.equal((await send('邮件经理甲', { origin: 'javascript:alert(1)' })).status, 400);
+  const noAddress = await send('没邮箱经理乙');
+  assert.equal(noAddress.status, 400);
+  assert.match((await noAddress.json()).error, /还没有设置 没邮箱经理乙 的邮箱/);
+  assert.equal((await send('邮件经理甲', { scopes: [] })).status, 400);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM share_link').get().count, 0, 'a refused request makes no link');
+
+  const first = await send('邮件经理甲');
+  assert.equal(first.status, 201);
+  const made = await first.json();
+  assert.deepEqual([made.recipient, made.sentTo, made.state, made.path], ['jia@example.com', 'jia@example.com', 'active', undefined]);
+  assert.equal((await send('邮件经理乙')).status, 201);
+  assert.deepEqual(sent.map((message) => [message.recipient, message.copy, message.cc]), [['jia@example.com', false, undefined], ['yi@example.com', false, undefined]]);
+  // The mailed link is that manager's own and works.
+  const link = /https:\/\/ledger\.example\.com:3443\/fill\/([A-Za-z0-9_-]{43})/.exec(sent[0].body);
+  assert.ok(link, 'the message carries the link');
+  assert.match(sent[0].subject, /专线填报链接｜邮件经理甲｜有效期至 /);
+  assert.match(sent[0].body, /台账补充信息、商机进度/);
+  assert.match(sent[0].body, /说明：请周五前填完/);
+  const page = await (await request(`/api/fill/${link[1]}`, {}, false)).json();
+  assert.deepEqual([page.manager, page.lines.map((line) => line.group_product_code)], ['邮件经理甲', ['SML1']]);
+  assert.notEqual(link[1], /fill\/([A-Za-z0-9_-]{43})/.exec(sent[1].body)[1], 'each manager has a different link');
+
+  // A message that certainly did not go out leaves no link behind; an unknown result keeps it.
+  failure = Object.assign(new Error('授权失效'), { uncertain: false });
+  const failed = await send('邮件经理甲');
+  assert.equal(failed.status, 502);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM share_link').get().count, 2);
+  failure = Object.assign(new Error('网络超时'), { uncertain: true });
+  const unknown = await send('邮件经理甲');
+  assert.deepEqual([unknown.status, (await unknown.json()).status], [502, 'unknown']);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM share_link WHERE sent_to IS NULL').get().count, 1);
+  failure = null;
+  const logged = db.prepare("SELECT detail FROM security_log WHERE event = 'share_created' ORDER BY id DESC LIMIT 4").all().map((row) => row.detail);
+  assert.equal(logged.some((detail) => /已邮件发送至 jia@example\.com/.test(detail)), true);
+  assert.equal(JSON.stringify(logged).includes(link[1]), false, 'the log never holds a link');
+
+  db.exec("DELETE FROM share_link; DELETE FROM leased_line WHERE group_product_code LIKE 'SML%'; DELETE FROM warning_mail_contact WHERE manager_key IN ('job:SJ1', 'name:邮件经理乙')");
+});
+
+test('the arrears summary can carry the manager\'s own fill link', async (t) => {
+  const { agentMail } = await import('../server/lib/agent-mail.js');
+  t.mock.method(agentMail, 'defaultCc', () => ['audit@example.com']);
+  const sent = [];
+  let failure = null;
+  t.mock.method(agentMail, 'send', async (message) => { if (failure) throw failure; sent.push(message); return { queued: true }; });
+  const insert = db.prepare(`INSERT INTO leased_line(group_product_code, group_code, group_name, manager_name, manager_job_no,
+    product_name, product_status_name, status_time, total_arrears, start_time) VALUES (?, 'DL01', '附链集团', '附链经理', 'DLJ', '互联网专线', '停机', '2026-06-01', ?, '2025-01-01')`);
+  insert.run('DL-1', 100);
+  await request('/api/warnings/mail/contacts', { method: 'PUT', body: { key: 'job:DLJ', email: 'dl@example.com' } });
+  const preview = async () => (await request('/api/warnings/digest/preview', { method: 'POST', body: { asOf: '2026-10-23', kpiMode: '0' } })).json();
+  const send = (id, body) => request(`/api/warnings/digest/${id}/send`, { method: 'POST', body });
+  const mine = (data) => data.managers.find((item) => item.manager === '附链经理');
+
+  const first = await preview();
+  assert.deepEqual(first.fillLink, { days: 7, scopes: ['台账补充信息', '商机进度'] });
+  // A bad address makes no link and sends nothing; the preview can still be sent.
+  const refused = await send(mine(first).id, { withLink: true, origin: 'not-a-url' });
+  assert.equal(refused.status, 400);
+  assert.deepEqual([sent.length, db.prepare('SELECT COUNT(*) AS count FROM share_link').get().count], [0, 0]);
+  // A send that certainly failed leaves no link behind.
+  failure = Object.assign(new Error('授权失效'), { uncertain: false });
+  assert.equal((await send(mine(first).id, { withLink: true, origin: 'https://ledger.example.com:3443' })).status, 502);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM share_link').get().count, 0);
+  failure = null;
+
+  db.prepare("UPDATE leased_line SET total_arrears = 120 WHERE group_product_code = 'DL-1'").run();
+  const done = await send(mine(await preview()).id, { withLink: true, origin: 'https://ledger.example.com:3443' });
+  assert.equal(done.status, 200);
+  assert.equal((await done.json()).withLink, true);
+  const link = /https:\/\/ledger\.example\.com:3443\/fill\/([A-Za-z0-9_-]{43})/.exec(sent[0].body);
+  assert.ok(link, 'the summary ends with the link');
+  assert.ok(sent[0].body.indexOf('欠费合计') < sent[0].body.indexOf(link[0]), 'after the arrears lines');
+  const page = await (await request(`/api/fill/${link[1]}`, {}, false)).json();
+  assert.deepEqual([page.manager, page.scopes, page.lines.map((line) => line.group_product_code)], ['附链经理', ['ledger', 'progress'], ['DL-1']]);
+  const stored = db.prepare('SELECT manager_name, sent_to FROM share_link').all().map((row) => ({ ...row }));
+  assert.deepEqual(stored, [{ manager_name: '附链经理', sent_to: 'dl@example.com' }]);
+
+  // Without the option the summary is as before and no link is made.
+  db.prepare("UPDATE leased_line SET total_arrears = 130 WHERE group_product_code = 'DL-1'").run();
+  assert.equal((await send(mine(await preview()).id, {})).status, 200);
+  assert.equal(sent[1].body.includes('/fill/'), false);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM share_link').get().count, 1);
+
+  db.exec("DELETE FROM share_link; DELETE FROM warning_mail_digest; DELETE FROM line_warning_mark WHERE line_id IN (SELECT id FROM leased_line WHERE group_product_code LIKE 'DL-%'); DELETE FROM leased_line WHERE group_product_code LIKE 'DL-%'; DELETE FROM warning_mail_contact WHERE manager_key = 'job:DLJ'");
+});
+
 test('logout invalidates the session cookie', async () => {
   const response = await request('/api/auth/logout', { method: 'POST' });
   assert.equal(response.status, 200);

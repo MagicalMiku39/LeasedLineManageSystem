@@ -2,6 +2,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { agentMail } from './agent-mail.js';
 import { addedStatuses, cancelledStatuses } from './ledger-rules.js';
+import { requestSource } from './client-cert.js';
+
+// The fill link a summary can carry: what it opens and for how long.
+const digestLinkScopes = ['ledger', 'progress'];
+const digestLinkDays = 7;
 
 const levelOrder = ['cancel', 'red', 'yellow', 'green'];
 const amount = (value) => Number(value || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -10,7 +15,7 @@ const signed = (value) => `${value > 0 ? '+' : ''}${value}`;
 const levelLabels = { green: '绿色（0–89 天）', yellow: '黄色（90–149 天）', red: '红色（150–179 天）', cancel: '待销户（满 180 天）' };
 export const managerKey = (row) => row.manager_job_no?.trim() ? `job:${row.manager_job_no.trim()}` : `name:${row.manager_name?.trim() || ''}`;
 
-export function createWarningMailRouter({ db, leasedLineSource, currentUser, stoppedDays, warningLevel, mail = agentMail }) {
+export function createWarningMailRouter({ db, leasedLineSource, currentUser, stoppedDays, warningLevel, mail = agentMail, fillLinks = null }) {
   const router = Router();
   db.exec(`CREATE TABLE IF NOT EXISTS warning_mail_contact (
     manager_key TEXT PRIMARY KEY, email TEXT NOT NULL, updated_by TEXT, updated_at TEXT NOT NULL
@@ -210,7 +215,8 @@ export function createWarningMailRouter({ db, leasedLineSource, currentUser, sto
         const { lineIds, ...shown } = report;
         return { id, ...shown, problem: !report.recipient ? '未设置邮箱' : sent ? '相同内容已发送过' : '' };
       });
-      res.json({ asOf: req.body.asOf, cc: reports[0]?.report.cc ?? mail.defaultCc(), withoutManager, managers });
+      res.json({ asOf: req.body.asOf, cc: reports[0]?.report.cc ?? mail.defaultCc(), withoutManager, managers,
+        fillLink: fillLinks ? { days: digestLinkDays, scopes: digestLinkScopes.map((key) => fillLinks.scopeLabels[key]) } : null });
     } catch (error) { res.status(400).json({ error: error.message }); }
   });
 
@@ -233,11 +239,34 @@ export function createWarningMailRouter({ db, leasedLineSource, currentUser, sto
       db.exec('COMMIT');
       if (!changed.changes) return res.status(409).json({ error: '汇总正在发送，请勿重复点击' });
     } catch (error) { db.exec('ROLLBACK'); throw error; }
+    // With a fill link: the manager's own, made now and added under the summary, so they can
+    // update their lines and forecasts straight from the message.
+    let link = null;
+    let body = report.body;
+    if (req.body?.withLink === true && fillLinks) {
+      const origin = String(req.body?.origin ?? '');
+      const made = /^https?:\/\/[^/\s]+$/.test(origin)
+        ? fillLinks.create({ manager: report.manager, scopes: digestLinkScopes, days: digestLinkDays, note: '' }, delivery.actor)
+        : { error: '系统地址不正确' };
+      if (made.error) {
+        db.prepare("UPDATE warning_mail_digest SET status = 'preview' WHERE id = ?").run(delivery.id);
+        return res.status(400).json({ error: `填报链接没有生成：${made.error}` });
+      }
+      link = made.link;
+      body = [
+        report.body,
+        '',
+        `如需补充台账信息或更新商机进度，可直接打开您的专属填报链接（${digestLinkDays} 天内有效，无需登录，只显示您名下的内容）：`,
+        `${origin}/fill/${made.token}`,
+        '拿到链接的人都能填写，请不要转发；需要在能打开专线台账管理系统的网络内使用。'
+      ].join('\n');
+    }
     try {
-      const result = await mail.send(report);
+      const result = await mail.send({ ...report, body });
       if (result?.queued !== true) throw new Error('邮箱未确认接收该汇总');
     } catch (error) {
       const status = error.uncertain === false ? 'failed' : 'unknown';
+      if (link && status === 'failed') fillLinks.discard(link.id);
       db.prepare('UPDATE warning_mail_digest SET status = ?, error = ? WHERE id = ?').run(status, error.message, delivery.id);
       return res.status(502).json({ error: status === 'unknown' ? `${error.message}；发送状态待核实，请先检查邮箱管理端，不要重复发送` : error.message, status });
     }
@@ -250,7 +279,8 @@ export function createWarningMailRouter({ db, leasedLineSource, currentUser, sto
       for (const lineId of report.lineIds) mark.run(lineId, delivery.actor, sentAt, lineId);
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); return res.status(500).json({ error: '邮件已提交但记录保存失败，请核实邮箱发送记录后再操作' }); }
-    res.json({ queued: true, recipient: report.recipient, sentAt, lineIds: report.lineIds });
+    if (link) fillLinks.sent(link.id, report.recipient, { username: delivery.actor, source: requestSource(req), via: '欠费预警汇总' });
+    res.json({ queued: true, recipient: report.recipient, sentAt, lineIds: report.lineIds, withLink: Boolean(link) });
   });
 
   router.get('/digest/history', (_req, res) => {

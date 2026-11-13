@@ -330,8 +330,12 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     res.json(groups);
   });
 
-  router.post('/forecasts', (req, res) => {
-    const body = req.body || {};
+  /**
+   * Registers a forecast. `manager` fixes whose forecast it is (a fill link is one manager's);
+   * without it the group's own manager is used. Returns the HTTP status and the JSON to answer with.
+   */
+  function createForecast(body = {}, username = '', manager = '') {
+    const fail = (error) => ({ status: 400, json: { error } });
     const groupCode = String(body.group_code ?? '').trim();
     const productType = String(body.product_type ?? '').trim();
     const kind = body.kind ?? 'added';
@@ -339,27 +343,33 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     const month = Number(body.month);
     const lineCount = Number(body.line_count);
     const confidence = body.confidence ?? 'unrated';
-    if (!forecastKinds.includes(kind)) return res.status(400).json({ error: '预计类别只能是新增或销户' });
-    if (!groupCode) return res.status(400).json({ error: '请填写集团编码' });
-    if (!productTypes.includes(productType)) return res.status(400).json({ error: '请选择产品类型' });
-    if (!isOpenMonth(year, month)) return res.status(400).json({ error: '预计月份只能选本月到明年年底' });
-    if (!Number.isSafeInteger(lineCount) || lineCount <= 0) return res.status(400).json({ error: '预计条数须为正整数' });
-    if (!confidenceLevels.includes(confidence)) return res.status(400).json({ error: '把握度不正确' });
+    if (!forecastKinds.includes(kind)) return fail('预计类别只能是新增或销户');
+    if (!groupCode) return fail('请填写集团编码');
+    if (!productTypes.includes(productType)) return fail('请选择产品类型');
+    if (!isOpenMonth(year, month)) return fail('预计月份只能选本月到明年年底');
+    if (!Number.isSafeInteger(lineCount) || lineCount <= 0) return fail('预计条数须为正整数');
+    if (!confidenceLevels.includes(confidence)) return fail('把握度不正确');
 
     // A group in the ledger keeps the ledger's name and manager; one only on the full group list
     // keeps the list's; any other group is entered by hand.
     const known = ledgerGroup(groupCode) || directoryGroup(groupCode);
     const groupName = known ? known.group_name : String(body.group_name ?? '').trim();
-    const managerName = known ? known.manager_name : String(body.manager_name ?? '').trim();
-    if (!groupName) return res.status(400).json({ error: '台账和全量集团清单中都没有该集团，请填写集团名称' });
-    if (!managerName) return res.status(400).json({ error: '台账和全量集团清单中都没有该集团，请填写客户经理' });
+    const managerName = manager || (known ? known.manager_name : String(body.manager_name ?? '').trim());
+    if (!groupName) return fail('台账和全量集团清单中都没有该集团，请填写集团名称');
+    if (!managerName) return fail('台账和全量集团清单中都没有该集团，请填写客户经理');
 
     const now = new Date().toISOString();
     const result = db.prepare(
       `INSERT INTO kpi_forecast (year, month, kind, group_code, group_name, manager_name, product_type, line_count, landed, confidence, created_by, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`
-    ).run(year, month, kind, groupCode, groupName, managerName, productType, lineCount, confidence, currentUser(req)?.username || '', now, now);
-    res.status(201).json(db.prepare('SELECT * FROM kpi_forecast WHERE id = ?').get(Number(result.lastInsertRowid)));
+    ).run(year, month, kind, groupCode, groupName, managerName, productType, lineCount, confidence, username, now, now);
+    return { status: 201, json: db.prepare('SELECT * FROM kpi_forecast WHERE id = ?').get(Number(result.lastInsertRowid)) };
+  }
+  router.createForecast = createForecast;
+
+  router.post('/forecasts', (req, res) => {
+    const result = createForecast(req.body || {}, currentUser(req)?.username || '');
+    res.status(result.status).json(result.json);
   });
 
   router.patch('/forecasts/:id', (req, res) => {
@@ -461,24 +471,32 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
   });
 
   // The time is the server's own, so a phone with a wrong clock cannot misdate an update.
-  router.post('/forecasts/:id/progress', (req, res) => {
-    const id = Number(req.params.id);
-    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: '预计记录不正确' });
+  function addProgress(id, body = {}, username = '') {
+    const fail = (error, status = 400) => ({ status, json: { error } });
+    if (!Number.isSafeInteger(id) || id <= 0) return fail('预计记录不正确');
     const existing = db.prepare('SELECT * FROM kpi_forecast WHERE id = ?').get(id);
-    if (!existing) return res.status(404).json({ error: '预计记录不存在' });
-    const note = String(req.body?.note ?? '').trim();
-    if (!note) return res.status(400).json({ error: '请填写进展说明' });
-    if (note.length > maxProgressNote) return res.status(400).json({ error: `进展说明不能超过 ${maxProgressNote} 字` });
+    if (!existing) return fail('预计记录不存在', 404);
+    const note = String(body.note ?? '').trim();
+    if (!note) return fail('请填写进展说明');
+    if (note.length > maxProgressNote) return fail(`进展说明不能超过 ${maxProgressNote} 字`);
     let landedCount = existing.landed_count;
-    const given = req.body?.landed_count;
+    const given = body.landed_count;
     if (given !== undefined && given !== null && given !== '') {
       landedCount = Number(given);
       if (!Number.isSafeInteger(landedCount) || landedCount < 0 || landedCount > existing.line_count) {
-        return res.status(400).json({ error: `已落地条数须为 0–${existing.line_count} 的整数` });
+        return fail(`已落地条数须为 0–${existing.line_count} 的整数`);
       }
     }
-    saveProgress(id, { note, landedCount, lineCount: existing.line_count, username: currentUser(req)?.username || '' });
-    res.status(201).json(forecastRow(id));
+    saveProgress(id, { note, landedCount, lineCount: existing.line_count, username });
+    return { status: 201, json: forecastRow(id) };
+  }
+  router.addProgress = addProgress;
+  router.forecastsOf = (manager) => db.prepare(`${forecastSelect} WHERE f.manager_name = ? ORDER BY f.year, f.month, f.id`).all(manager).map(withRemaining);
+  router.openMonths = () => openForecastMonths(today());
+
+  router.post('/forecasts/:id/progress', (req, res) => {
+    const result = addProgress(Number(req.params.id), req.body || {}, currentUser(req)?.username || '');
+    res.status(result.status).json(result.json);
   });
 
   router.delete('/forecasts/:id', (req, res) => {

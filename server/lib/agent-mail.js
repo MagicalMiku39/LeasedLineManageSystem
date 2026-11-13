@@ -46,9 +46,9 @@ export function createAgentMail({ execute = promisify(execFile), binary = () => 
         return { available: false, loggedIn: false };
       }
     },
-    async send({ recipient, cc, subject, body }) {
-      const copies = defaultCc();
-      if (cc && JSON.stringify(cc) !== JSON.stringify(copies)) {
+    async send({ recipient, cc, subject, body, copy = true }) {
+      const copies = copy ? defaultCc() : [];
+      if (copy && cc && JSON.stringify(cc) !== JSON.stringify(copies)) {
         const error = new Error('默认抄送配置已变更，请重新预览报告');
         error.uncertain = false;
         throw error;

@@ -28,6 +28,7 @@ import { createWarningsRouter } from './lib/warnings.js';
 import { createKpiRouter } from './lib/kpi.js';
 import { createStrategicRouter } from './lib/strategic.js';
 import { createGroupsRouter } from './lib/groups.js';
+import { createShareService } from './lib/share.js';
 import { createWorkbenchRouter } from './lib/workbench.js';
 import { clientCertPaths, createClientCertListener, requestSource } from './lib/client-cert.js';
 import { readClientCertSettings } from './lib/client-cert-admin.js';
@@ -108,7 +109,19 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ ok: true });
 });
 
+// Fill links are reached with their token alone, so they sit in front of the login check.
+const shareService = createShareService({
+  db,
+  currentUser,
+  updateLine,
+  kpi: () => kpiRouter,
+  productTypes: kpiProductNames,
+  logEvent: logSecurityEvent
+});
+app.use('/api/fill', shareService.publicRouter);
+
 app.use('/api', requireAuth);
+app.use('/api/share-links', shareService.adminRouter);
 
 app.post('/api/auth/password', (req, res) => {
   try {
@@ -687,42 +700,47 @@ app.get('/api/ledger/:id', (req, res) => {
   res.json(row);
 });
 
-app.patch('/api/ledger/:id', (req, res) => {
-  const existing = db.prepare('SELECT * FROM leased_line WHERE id = ?').get(req.params.id);
-  if (!existing) {
-    res.status(404).json({ error: '记录不存在' });
-    return;
-  }
+/**
+ * Edits one line's hand-kept fields and logs each change. `fields` narrows what may be written
+ * (a fill link allows fewer), `by` and `source` say who did it. Returns the status and JSON.
+ */
+function updateLine(id, body = {}, { fields = editableFields, by = 'admin', source = 'manual' } = {}) {
+  const existing = db.prepare('SELECT * FROM leased_line WHERE id = ?').get(id);
+  if (!existing) return { status: 404, json: { error: '记录不存在' } };
 
   const updates = {};
   for (const field of editableFields) {
-    if (Object.hasOwn(req.body, field)) {
-      updates[field] = amountFields.has(field) ? numberOrNull(req.body[field]) : req.body[field] || null;
+    if (fields.includes(field) && Object.hasOwn(body, field)) {
+      updates[field] = amountFields.has(field) ? numberOrNull(body[field]) : body[field] || null;
     }
   }
 
-  if (Object.keys(updates).length === 0) {
-    res.status(400).json({ error: '没有可更新字段' });
-    return;
-  }
+  if (Object.keys(updates).length === 0) return { status: 400, json: { error: '没有可更新字段' } };
 
   updates.updated_at = nowIso();
   const columns = Object.keys(updates);
   const assignments = columns.map((column) => `${column} = ?`).join(', ');
-  db.prepare(`UPDATE leased_line SET ${assignments} WHERE id = ?`).run(...columns.map((column) => updates[column]), req.params.id);
+  db.prepare(`UPDATE leased_line SET ${assignments} WHERE id = ?`).run(...columns.map((column) => updates[column]), id);
 
   const log = db.prepare(
     `INSERT INTO change_log (leased_line_id, field_name, old_value, new_value, changed_by, change_source)
      VALUES (?, ?, ?, ?, ?, ?)`
   );
+  const changes = [];
   for (const [field, value] of Object.entries(updates)) {
     if (field === 'updated_at') continue;
     if (String(existing[field] ?? '') !== String(value ?? '')) {
-      log.run(req.params.id, field, existing[field] ?? null, value ?? null, 'admin', 'manual');
+      log.run(id, field, existing[field] ?? null, value ?? null, by, source);
+      changes.push({ field, from: existing[field] ?? null, to: value ?? null });
     }
   }
 
-  res.json(db.prepare('SELECT * FROM leased_line WHERE id = ?').get(req.params.id));
+  return { status: 200, json: db.prepare('SELECT * FROM leased_line WHERE id = ?').get(id), changes };
+}
+
+app.patch('/api/ledger/:id', (req, res) => {
+  const result = updateLine(req.params.id, req.body || {});
+  res.status(result.status).json(result.json);
 });
 
 app.get('/api/options', (_req, res) => {
@@ -1014,7 +1032,7 @@ app.get('/api/stats', (req, res) => {
 });
 
 app.use('/api/revenue', createRevenueRouter({ db, uploadDir, leasedLineSource }));
-app.use('/api/warnings', createWarningsRouter({ db, leasedLineSource, currentUser }));
+app.use('/api/warnings', createWarningsRouter({ db, leasedLineSource, currentUser, fillLinks: shareService.forMail }));
 const clientCertFiles = clientCertPaths();
 const clientCertListener = createClientCertListener({ app, paths: clientCertFiles });
 app.use('/api/settings/client-certs', createClientCertRouter({

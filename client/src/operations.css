@@ -285,3 +285,49 @@ button.group-link:hover { background: none; box-shadow: none; text-decoration: u
   .kpi-list-search { flex-basis: 100%; }
   .kpi-list-filters select { flex: 1 1 140px; min-width: 0; }
 }
+
+/* ---------- 填报链接 ---------- */
+.share-create form { margin: 0; }
+.share-form { display: grid; grid-template-columns: minmax(0, 1fr) 140px; gap: 14px; }
+.share-form label { display: grid; gap: 6px; min-width: 0; margin: 0; font-size: 13px; }
+.share-form select, .share-form input { width: 100%; min-width: 0; }
+.share-form-wide { grid-column: 1 / -1; }
+.share-scopes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 16px 0 0; padding: 0; border: 0; }
+.share-scopes legend { margin-bottom: 8px; padding: 0; font-size: 13px; }
+.share-scopes label { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); font-size: 13px; }
+.share-scopes input { width: 16px; height: 16px; margin: 2px 0 0; flex: none; }
+.share-scopes span { display: grid; gap: 3px; min-width: 0; }
+.share-scopes small { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.share-made { display: grid; gap: 10px; margin-top: 18px; padding: 14px; border: 1px solid rgba(17, 132, 66, .35); border-radius: var(--radius-sm); background: #f3faf5; font-size: 13px; }
+.share-url { display: flex; gap: 8px; }
+.share-url input { flex: 1; min-width: 0; font-family: var(--mono); font-size: 12px; }
+.share-url button { flex: none; white-space: nowrap; }
+.share-made .operations-rule { margin: 0; }
+.share-count { margin-left: 6px; color: var(--muted); font-size: 13px; font-weight: 400; }
+.share-table td.share-wrap { min-width: 120px; max-width: 260px; white-space: normal; overflow-wrap: anywhere; }
+.share-table td.share-summary { max-width: 520px; }
+.share-over { color: var(--muted); }
+.share-state-active { background: #e8f4ec; color: #167d4a; }
+.share-state-expired, .share-state-revoked { background: #eeeef1; color: #5b5b64; }
+.share-log-note { margin: 0 0 10px; }
+.share-log-note .text-button { height: auto; margin: 0 6px; padding: 0; font-size: 13px; }
+@media (max-width: 700px) {
+  .share-form, .share-scopes { grid-template-columns: minmax(0, 1fr); }
+  .share-url { flex-direction: column; }
+}
+.share-create-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; margin-bottom: 16px; }
+.share-create-head h3 { margin: 0; }
+.share-batch { margin: 0 0 16px; padding: 0; border: 0; min-width: 0; }
+.share-batch legend { margin-bottom: 8px; padding: 0; font-size: 13px; }
+.share-batch-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.share-batch-tools button { height: 30px; padding: 0 10px; font-size: 12px; }
+.share-batch-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; max-height: 280px; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.share-batch-list label { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); font-size: 13px; }
+.share-batch-list input { width: 16px; height: 16px; margin: 2px 0 0; flex: none; }
+.share-batch-list span { display: grid; gap: 2px; min-width: 0; }
+.share-batch-list small { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.share-batch-note { margin: 14px 0 0; }
+.warning-digest-link { display: flex; align-items: flex-start; gap: 8px; margin: 10px 0 0; font-size: 13px; }
+.warning-digest-link input { width: 16px; height: 16px; margin: 2px 0 0; flex: none; }
+.warning-digest-link span { display: grid; gap: 3px; min-width: 0; }
+.warning-digest-link small { color: #686d76; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }

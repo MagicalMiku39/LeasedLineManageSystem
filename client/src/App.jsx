@@ -6,6 +6,7 @@ import AppHeader from './components/AppHeader.jsx';
 import SubTabs from './components/SubTabs.jsx';
 import { AuthStatusView, LoginView, SetupView } from './components/AuthViews.jsx';
 import { NoticeBar } from './components/Feedback.jsx';
+import FillPage from './FillPage.jsx';
 import GroupRevenue from './GroupRevenue.jsx';
 import Groups from './Groups.jsx';
 import ImportRecords from './ImportRecords.jsx';
@@ -428,4 +429,6 @@ function App() {
   );
 }
 
-createRoot(document.getElementById('root')).render(<App />);
+// A fill link opens its own page, with no login and none of the app around it.
+const fillToken = /^\/fill\/([A-Za-z0-9_-]+)\/?$/.exec(window.location.pathname)?.[1];
+createRoot(document.getElementById('root')).render(fillToken ? <FillPage token={fillToken} /> : <App />);

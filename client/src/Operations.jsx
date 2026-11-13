@@ -3,6 +3,7 @@ import { Bell, BellOff, Mail, MailPlus, Search } from 'lucide-react';
 import { SegmentBar, SegmentLegend } from './charts.jsx';
 import SubTabs from './components/SubTabs.jsx';
 import KpiAchievement from './KpiAchievement.jsx';
+import ShareLinks from './ShareLinks.jsx';
 import StrategicCustomers from './StrategicCustomers.jsx';
 import Workbench from './Workbench.jsx';
 import { WarningDigestDialog, WarningMailDialog, WarningMailSettings } from './WarningMail.jsx';
@@ -18,6 +19,7 @@ const sections = [
   { key: 'warnings', label: '欠费销户预警' },
   { key: 'kpi', label: 'KPI达成' },
   { key: 'strategic', label: '战客专线渗透' },
+  { key: 'share', label: '填报链接' },
   { key: 'overview', label: '导入概览' }
 ];
 
@@ -28,6 +30,7 @@ export default function Operations({ ref, kpiMode, refreshToken, onOpenLine, sec
     <SubTabs label="运营中心" items={sections} active={section} onChange={(key) => onSectionChange?.(key)} />
     {section === 'kpi' && <KpiAchievement ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} onOpenGroup={onOpenGroup} prefill={kpiPrefill} />}
     {section === 'strategic' && <StrategicCustomers ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} onOpenLine={onOpenLine} focus={strategicFocus} onOpenGroup={onOpenGroup} />}
+    {section === 'share' && <ShareLinks ref={ref} refreshToken={refreshToken} />}
     {section === 'overview' && <Workbench ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} onNavigate={onNavigate} />}
     {section === 'warnings' && <ArrearsWarnings ref={ref} kpiMode={kpiMode} refreshToken={refreshToken} onOpenLine={onOpenLine} onOpenGroup={onOpenGroup} />}
   </main>;

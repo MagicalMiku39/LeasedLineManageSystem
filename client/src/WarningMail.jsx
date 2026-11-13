@@ -101,6 +101,8 @@ export function WarningDigestDialog({ asOf, kpiMode, onClose, onSent, onConfigur
   const [sending, setSending] = useState(false);
   const [results, setResults] = useState({});
   const [history, setHistory] = useState([]);
+  // Each summary can end with that manager's own fill link.
+  const [withLink, setWithLink] = useState(true);
 
   useEffect(() => {
     dialog.current.showModal();
@@ -131,7 +133,7 @@ export function WarningDigestDialog({ asOf, kpiMode, onClose, onSent, onConfigur
     for (const item of picked) {
       setResults((current) => ({ ...current, [item.id]: { state: 'sending' } }));
       try {
-        const result = await request(`/digest/${item.id}/send`, { method: 'POST' });
+        const result = await request(`/digest/${item.id}/send`, json({ withLink: withLink && Boolean(data.fillLink), origin: window.location.origin }));
         marked.push(...(result.lineIds || []));
         setResults((current) => ({ ...current, [item.id]: { state: 'queued' } }));
       } catch (err) {
@@ -146,6 +148,15 @@ export function WarningDigestDialog({ asOf, kpiMode, onClose, onSent, onConfigur
     <div className="warning-mail-title"><h3 id="warning-digest-title">汇总发送欠费预警</h3><button title="关闭" disabled={sending} onClick={onClose}><X size={18} /></button></div>
     <p className="operations-rule">统计日期 {asOf}。每位客户经理一封邮件，列出其名下全部欠费停机专线（不含已标“忽略”的），并附本月和本年度净增。勾选后点击发送；发送后这些专线标为“提醒”。</p>
     {data && <p className="operations-rule">抄送：{data.cc?.join('；') || '—'}{data.withoutManager > 0 ? ` · 另有 ${data.withoutManager} 条专线没有客户经理，未列入` : ''}</p>}
+    {data?.fillLink && managers.length > 0 && (
+      <label className="warning-digest-link">
+        <input type="checkbox" checked={withLink} disabled={sending} onChange={(event) => setWithLink(event.target.checked)} />
+        <span>
+          <strong>在邮件末尾附上各自的填报链接</strong>
+          <small>每位客户经理一条专属链接，{data.fillLink.days} 天内有效，可填写{data.fillLink.scopes.join('、')}。链接地址为 {window.location.origin}。汇总邮件会抄送，抄送人也会看到链接。</small>
+        </span>
+      </label>
+    )}
     {error && <p className="operations-error" role="alert">{error}</p>}
     {!data && !error && <p>正在生成汇总…</p>}
     {data && managers.length === 0 && <p>没有需要提醒的欠费停机专线。</p>}
