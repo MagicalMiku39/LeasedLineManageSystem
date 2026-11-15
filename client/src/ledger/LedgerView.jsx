@@ -87,7 +87,6 @@ function AdvancedFilters({ filters, options, onChange }) {
     <div className="advanced-filters" id="ledger-advanced-filters">
       {textField('groupCode', '集团编码', '支持模糊匹配')}
       {textField('groupProductCode', '集团产品编码', '支持模糊匹配')}
-      {textField('productCode', '产品编码', '如 pg.dt.zx.cs')}
       {textField('bandwidth', '专线带宽', '如 10M、100')}
       <label>
         最近半年出账为 0
@@ -184,7 +183,7 @@ export default function LedgerView({
             aria-label="搜索台账"
             value={filters.keyword}
             onChange={(event) => onFilterChange('keyword', event.target.value)}
-            placeholder="搜索集团编码、产品编码、客户、产品、经理、地址"
+            placeholder="搜索集团编码、集团产品编码、客户、产品、经理、地址"
           />
         </label>
         <MultiSelectFilter label="归属区分" value={filters.region} options={options.regions || []} onChange={(value) => onFilterChange('region', value)} />

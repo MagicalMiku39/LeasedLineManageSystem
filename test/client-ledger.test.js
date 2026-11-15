@@ -149,9 +149,11 @@ test('column settings survive damaged storage and keep new columns', () => {
 test('codes stay text columns and amounts are the only money columns', () => {
   const money = tableColumns.filter((column) => column.money).map((column) => column.key).sort();
   assert.deepEqual(money, ['actual_monthly_fee', 'actual_yearly_fee', 'one_time_fee', 'package_fee', 'total_arrears']);
-  for (const key of ['group_code', 'group_product_code', 'product_code', 'manager_job_no', 'one_time_fee_name']) {
+  for (const key of ['group_code', 'group_product_code', 'manager_job_no', 'one_time_fee_name']) {
     assert.equal(tableColumns.find((column) => column.key === key).money, undefined);
   }
+  // The lettered product code (pg.dt.zx…) is kept in the data but never offered as a column.
+  assert.equal(tableColumns.some((column) => column.key === 'product_code'), false);
 });
 
 test('display helpers print zero, dash missing values and keep codes untouched', () => {

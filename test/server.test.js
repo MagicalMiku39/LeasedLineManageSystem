@@ -2087,6 +2087,65 @@ test('odd use of fill links is logged, and the next login is told what happened'
   db.exec("DELETE FROM share_link_source; DELETE FROM share_link; DELETE FROM leased_line WHERE group_product_code = 'AUL1'; DELETE FROM auth_attempt");
 });
 
+test('a backup can be deleted, with the authenticator code, and the deletion is logged', async () => {
+  const secret = db.prepare('SELECT totp_secret FROM auth_user WHERE username = ?').get('admin').totp_secret;
+  const made = await (await request('/api/settings/backups', { method: 'POST' })).json();
+  const kept = await (await request('/api/settings/backups', { method: 'POST' })).json();
+  const names = async () => (await (await request('/api/settings/backups')).json()).backups.map((item) => item.name);
+  assert.equal((await names()).includes(made.name), true);
+  const remove = (name, body) => request(`/api/settings/backups/${name}`, { method: 'DELETE', body });
+
+  assert.equal((await request(`/api/settings/backups/${made.name}`, { method: 'DELETE' }, false)).status, 401);
+  assert.equal((await remove(made.name, { code: '000000' })).status, 403);
+  assert.equal((await remove('..%2Fledger.db', { code: totp(secret) })).status, 404);
+  assert.equal((await remove('ledger-20200101T000000Z-manual-abcdef.db.gz', { code: totp(secret) })).status, 404);
+  assert.equal((await names()).includes(made.name), true, 'refused requests delete nothing');
+
+  const done = await remove(made.name, { code: totp(secret) });
+  assert.equal(done.status, 200);
+  assert.deepEqual(await done.json(), { deleted: made.name });
+  const after = await names();
+  assert.deepEqual([after.includes(made.name), after.includes(kept.name)], [false, true]);
+  const dir = (await (await request('/api/settings/backups')).json()).dir;
+  assert.equal(readdirSync(dir).some((file) => file.startsWith(made.name)), false, 'the file and its description are both gone');
+  // It can no longer be downloaded or rolled back to.
+  assert.equal((await request(`/api/settings/backups/${made.name}/download`, { method: 'POST', body: { code: totp(secret) } })).status, 404);
+  assert.equal((await request(`/api/settings/backups/${made.name}/restore-preview`, { method: 'POST', body: { scope: 'ledger' } })).status >= 400, true);
+  assert.equal((await remove(made.name, { code: totp(secret) })).status, 404);
+  const logged = db.prepare("SELECT detail FROM security_log WHERE event = 'backup_deleted'").all();
+  assert.equal(logged.length, 1);
+  assert.equal(logged[0].detail.includes(made.name), true);
+  db.exec("DELETE FROM auth_attempt");
+});
+
+test('the lettered product code is stored but not shown: not in exports, searches or warning mails', async (t) => {
+  const { agentMail } = await import('../server/lib/agent-mail.js');
+  t.mock.method(agentMail, 'defaultCc', () => ['audit@example.com']);
+  const id = Number(db.prepare(`INSERT INTO leased_line (group_code, group_name, group_product_code, product_code, product_name, product_status_name, manager_name, manager_job_no, status_time, total_arrears, updated_at)
+    VALUES ('PC001', '编码集团', '2705404918972', 'pg.dt.zx.hlw', '互联网专线', '停机', '编码经理', 'PCJ', '2026-06-01', 50, ?)`).run(nowIso()).lastInsertRowid);
+  await request('/api/warnings/mail/contacts', { method: 'PUT', body: { key: 'job:PCJ', email: 'pc@example.com' } });
+  assert.equal(db.prepare('SELECT product_code FROM leased_line WHERE id = ?').get(id).product_code, 'pg.dt.zx.hlw', 'still kept in the data');
+
+  // The ledger finds the line by its number, not by the lettered code.
+  const search = async (word) => (await (await request(`/api/ledger?kpiMode=0&keyword=${encodeURIComponent(word)}`)).json()).total;
+  assert.deepEqual([await search('2705404918972'), await search('pg.dt.zx.hlw')], [1, 0]);
+  assert.equal((await (await request('/api/ledger?kpiMode=0&keyword=2705404918972&productCode=nothing-like-it')).json()).total, 1, 'the old filter no longer narrows anything');
+
+  const exported = XLSX.read(Buffer.from(await (await request('/api/ledger/export?kpiMode=0&keyword=2705404918972')).arrayBuffer()), { type: 'buffer' });
+  const sheet = XLSX.utils.sheet_to_json(exported.Sheets[exported.SheetNames[0]], { header: 1, raw: false });
+  assert.deepEqual([sheet[0].includes('集团产品编码'), sheet[0].includes('产品编码'), JSON.stringify(sheet).includes('pg.dt.zx.hlw')], [true, false, false]);
+
+  const warnings = await (await request('/api/warnings?kpiMode=0&asOf=2026-10-23')).json();
+  const row = warnings.rows.find((item) => item.id === id);
+  assert.deepEqual([row.group_product_code, row.product_name, Object.hasOwn(row, 'product_code')], ['2705404918972', '互联网专线', false]);
+  const single = await (await request(`/api/warnings/${id}/reminder/preview`, { method: 'POST', body: { asOf: '2026-10-23', kpiMode: '0' } })).json();
+  assert.deepEqual([single.body.includes('集团产品编码：2705404918972'), single.body.includes('pg.dt.zx.hlw'), /\n产品编码：/.test(single.body)], [true, false, false]);
+  const digest = (await (await request('/api/warnings/digest/preview', { method: 'POST', body: { asOf: '2026-10-23', kpiMode: '0' } })).json()).managers.find((item) => item.manager === '编码经理');
+  assert.deepEqual([digest.body.includes('集团产品编码 2705404918972'), digest.body.includes('pg.dt.zx.hlw'), digest.body.includes('｜产品编码')], [true, false, false]);
+
+  db.exec("DELETE FROM warning_mail_delivery WHERE line_id IN (SELECT id FROM leased_line WHERE group_code = 'PC001'); DELETE FROM warning_mail_digest; DELETE FROM leased_line WHERE group_code = 'PC001'; DELETE FROM warning_mail_contact WHERE manager_key = 'job:PCJ'");
+});
+
 test('logout invalidates the session cookie', async () => {
   const response = await request('/api/auth/logout', { method: 'POST' });
   assert.equal(response.status, 200);

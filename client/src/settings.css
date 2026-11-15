@@ -395,7 +395,7 @@
 }
 
 /* Below this the side-by-side card is too narrow for the backup and device lists. */
-@media (max-width: 1300px) {
+@media (max-width: 1350px) {
   .settings-section {
     grid-template-columns: minmax(0, 1fr);
     gap: 12px;
@@ -445,4 +445,29 @@
   .settings-dialog {
     padding: 16px;
   }
+}
+
+.settings-row-actions .settings-danger {
+  border-color: rgba(217, 45, 32, .45);
+  color: var(--red);
+}
+
+/* Three actions per backup: the note column gives up width so the row still fits its card. */
+.settings-backup-scroll .settings-table th,
+.settings-backup-scroll .settings-table td {
+  padding-left: 9px;
+  padding-right: 9px;
+}
+
+.settings-backup-scroll .settings-wrap-cell {
+  min-width: 110px;
+  max-width: 190px;
+}
+
+.settings-backup-scroll .settings-row-actions {
+  gap: 6px;
+}
+
+.settings-backup-scroll .settings-row-actions button {
+  padding: 0 8px;
 }

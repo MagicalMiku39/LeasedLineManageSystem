@@ -208,7 +208,7 @@ export default function DetailDrawer({ record, onClose, onSaved, onOpenGroup }) 
           <h3>基础信息</h3>
           <div className="readonly-grid">
             <span>集团名称</span><strong>{displayValue(record.group_name)}</strong>
-            <span>产品编码</span><strong>{displayValue(record.product_code)}</strong>
+            <span>集团产品编码</span><strong>{displayValue(record.group_product_code)}</strong>
             <span>产品名称</span><strong>{displayValue(record.product_name)}</strong>
             <span>客户经理</span><strong>{displayValue(record.manager_name)}</strong>
           </div>

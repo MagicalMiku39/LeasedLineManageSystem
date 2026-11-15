@@ -178,7 +178,6 @@ const originalLedgerColumns = [
   'group_product_account_id',
   'payment_method',
   'payment_method_name',
-  'product_code',
   'product_name',
   'product_category',
   'start_time',
@@ -359,11 +358,11 @@ export function buildLedgerWhere(query) {
   if (query.keyword) {
     const keyword = `%${query.keyword.trim()}%`;
     where.push(`(
-      group_code LIKE ? OR group_name LIKE ? OR group_product_code LIKE ? OR product_code LIKE ? OR
+      group_code LIKE ? OR group_name LIKE ? OR group_product_code LIKE ? OR
       group_user_name LIKE ? OR group_product_account_id LIKE ? OR product_name LIKE ? OR
       manager_name LIKE ? OR a_end_address LIKE ? OR z_end_address LIKE ?
     )`);
-    params.push(keyword, keyword, keyword, keyword, keyword, keyword, keyword, keyword, keyword, keyword);
+    params.push(keyword, keyword, keyword, keyword, keyword, keyword, keyword, keyword, keyword);
   }
 
   const exactFilters = {
@@ -386,7 +385,6 @@ export function buildLedgerWhere(query) {
   const likeFilters = {
     groupCode: 'group_code',
     groupProductCode: 'group_product_code',
-    productCode: 'product_code',
     bandwidth: 'bandwidth'
   };
 
@@ -535,7 +533,6 @@ const exportColumns = [
   ['集团产品账户ID', 'group_product_account_id'],
   ['付费方式', 'payment_method'],
   ['付费方式名称', 'payment_method_name'],
-  ['产品编码', 'product_code'],
   ['产品名称', 'product_name'],
   ['产品大类', 'product_category'],
   ['开始时间', 'start_time'],

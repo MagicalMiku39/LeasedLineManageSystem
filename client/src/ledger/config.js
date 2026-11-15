@@ -13,7 +13,6 @@ export const emptyFilters = {
   ledgerStatus: '',
   groupCode: '',
   groupProductCode: '',
-  productCode: '',
   bandwidth: '',
   zeroBilling: '',
   contractEndFrom: '',
@@ -34,7 +33,6 @@ export const tableColumns = [
   { key: 'group_product_account_id', label: '集团产品账户ID', defaultVisible: false },
   { key: 'payment_method', label: '付费方式', defaultVisible: false },
   { key: 'payment_method_name', label: '付费方式名称', defaultVisible: false },
-  { key: 'product_code', label: '产品编码', defaultVisible: true },
   { key: 'product_name', label: '产品名称', defaultVisible: true },
   { key: 'product_category', label: '产品大类', defaultVisible: false },
   { key: 'start_time', label: '开始时间', defaultVisible: false },
@@ -120,7 +118,7 @@ export const fieldLabels = {
   remark: '备注'
 };
 
-export const advancedFilterKeys = ['groupCode', 'groupProductCode', 'productCode', 'bandwidth', 'zeroBilling', 'contractEndFrom', 'contractEndTo', 'statFilter'];
+export const advancedFilterKeys = ['groupCode', 'groupProductCode', 'bandwidth', 'zeroBilling', 'contractEndFrom', 'contractEndTo', 'statFilter'];
 
 // Clickable statistics. `filter` is the statFilter sent to /api/ledger; '' clears every filter.
 export const statCards = [

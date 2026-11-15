@@ -24,6 +24,7 @@ export const securityEventLabels = {
   cert_revoked: '吊销证书',
   backup_created: '手动备份',
   backup_downloaded: '下载备份',
+  backup_deleted: '删除备份',
   backup_restored: '回退数据',
   share_created: '生成填报链接',
   share_revoked: '作废填报链接',

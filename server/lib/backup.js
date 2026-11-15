@@ -192,6 +192,18 @@ export function createBackupService({ db, dbPath, dir = process.env.BACKUP_DIR |
     return existsSync(path) && existsSync(`${path}.json`) ? path : null;
   }
 
+  // Removes one backup and its description, after whatever is already running has finished.
+  function remove(name) {
+    const run = queue.then(() => {
+      const path = file(name);
+      if (!path) throw new BackupError('找不到这个备份，可能已按保留规则清理');
+      rmSync(path, { force: true });
+      rmSync(`${path}.json`, { force: true });
+    });
+    queue = run.catch(() => {});
+    return run;
+  }
+
   function scopeOf(key) {
     const scope = restoreScopes[key];
     if (!scope) throw new BackupError('请选择要回退的数据范围');
@@ -323,7 +335,7 @@ export function createBackupService({ db, dbPath, dir = process.env.BACKUP_DIR |
     };
   }
 
-  return { create, list, status, file, weeklyDue, startWeekly, preview, restore };
+  return { create, list, status, file, remove, weeklyDue, startWeekly, preview, restore };
 }
 
 /**
@@ -398,6 +410,21 @@ export function createBackupRouter({ backups, currentUser, verifyCode, logEvent 
       res.json(result);
     } catch (error) {
       fail(res, error);
+    }
+  });
+
+  // Deleting cannot be undone, so it asks for the authenticator code like a download does.
+  router.delete('/:name', async (req, res) => {
+    if (!mainPortOnly(req, res)) return;
+    const target = backups.list().find((item) => item.name === req.params.name);
+    if (!target) return res.status(404).json({ error: '找不到这个备份，可能已按保留规则清理' });
+    if (!codeAccepted(req, res)) return;
+    try {
+      await backups.remove(target.name);
+      record(req, 'backup_deleted', `${target.name}（${target.reason}${target.detail ? `，${target.detail}` : ''}）`);
+      res.json({ deleted: target.name });
+    } catch (error) {
+      res.status(error instanceof BackupError ? 404 : 500).json({ error: error instanceof BackupError ? error.message : `删除失败：${error.message}` });
     }
   });
 

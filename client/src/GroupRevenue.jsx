@@ -287,7 +287,7 @@ export default function GroupRevenue({ ref, onExportReady, kpiMode, defaultManag
         const XLSX = await import('xlsx');
         const incomeFields = [['totalRevenue', '集团信息化收入'], ['lineRevenue', '报表专线收入'], ['lineShare', '专线占比'], ['previousRevenue', '上月收入'], ['change', '变化金额'], ['changeRate', '环比']];
         const fields = group
-          ? [['productId', '产品编码'], ['productName', '产品名称'], ['category', '收入分类'], ['revenue', '本月收入'], ...incomeFields.slice(3)]
+          ? [['productId', '产品大类ID'], ['productName', '产品名称'], ['category', '收入分类'], ['revenue', '本月收入'], ...incomeFields.slice(3)]
           : view === 'history'
             ? [['fileName', '文件名称'], ['months', '收入月份'], ['rowCount', '明细行数'], ['status', '批次状态'], ['activeMonths', '当前有效月份'], ['createdBy', '操作人'], ['createdAt', '导入时间']]
             : view === 'groups'

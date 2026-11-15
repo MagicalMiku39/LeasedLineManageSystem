@@ -49,7 +49,7 @@ export function createWarningMailRouter({ db, leasedLineSource, currentUser, sto
     const report = {
       lineId: id, asOf, kpiMode: String(kpiMode ?? '1'), recipient: contact.email, cc: mail.defaultCc(), manager: row.manager_name,
       subject: `欠费停机预警｜${row.group_name || row.group_code || '集团'}｜${asOf}`,
-      body: `${row.manager_name}，您好：\n\n以下专线处于欠费停机状态，请跟进处理。\n\n统计日期：${asOf}\n集团编码：${row.group_code || '-'}\n集团名称：${row.group_name || '-'}\n集团产品编码：${row.group_product_code || '-'}\n产品编码：${row.product_code || '-'}\n产品名称：${row.product_name || '-'}\n产品账户：${row.group_product_account_id || '-'}\n客户经理：${row.manager_name}\n客户经理工号：${row.manager_job_no || '-'}\n停机日期：${row.status_time.slice(0, 10)}\n停机时长：${days} 天\n总欠费：${Number(row.total_arrears).toFixed(2)} 元\n预警等级：${levelLabels[warningLevel(days)]}\n\n${days >= 180 ? '该专线欠费停机已满 180 天，请核实并按业务流程办理销户。' : '请核实欠费原因，联系客户处理欠费，并跟进专线恢复情况。'}\n\n停机天数按统计日期与状态日期的自然日差计算。`
+      body: `${row.manager_name}，您好：\n\n以下专线处于欠费停机状态，请跟进处理。\n\n统计日期：${asOf}\n集团编码：${row.group_code || '-'}\n集团名称：${row.group_name || '-'}\n集团产品编码：${row.group_product_code || '-'}\n产品名称：${row.product_name || '-'}\n产品账户：${row.group_product_account_id || '-'}\n客户经理：${row.manager_name}\n客户经理工号：${row.manager_job_no || '-'}\n停机日期：${row.status_time.slice(0, 10)}\n停机时长：${days} 天\n总欠费：${Number(row.total_arrears).toFixed(2)} 元\n预警等级：${levelLabels[warningLevel(days)]}\n\n${days >= 180 ? '该专线欠费停机已满 180 天，请核实并按业务流程办理销户。' : '请核实欠费原因，联系客户处理欠费，并跟进专线恢复情况。'}\n\n停机天数按统计日期与状态日期的自然日差计算。`
     };
     return { report, fingerprint: createHash('sha256').update(JSON.stringify(report)).digest('hex') };
   }
@@ -174,7 +174,7 @@ export function createWarningMailRouter({ db, leasedLineSource, currentUser, sto
         '',
         ...lines.flatMap((line, index) => [
           `${index + 1}. ${line.group_name || '-'}（集团编码 ${line.group_code || '-'}）`,
-          `   集团产品编码 ${line.group_product_code || '-'}｜产品编码 ${line.product_code || '-'}｜${line.product_name || '-'}｜产品账户 ${line.group_product_account_id || '-'}`,
+          `   集团产品编码 ${line.group_product_code || '-'}｜${line.product_name || '-'}｜产品账户 ${line.group_product_account_id || '-'}`,
           `   停机日期 ${String(line.status_time).slice(0, 10)}，已停机 ${line.days} 天，欠费 ${amount(line.total_arrears)} 元，预警等级：${levelLabels[line.level]}`,
           ''
         ]),

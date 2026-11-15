@@ -38,7 +38,7 @@ export function createWarningsRouter({ db, leasedLineSource, currentUser, fillLi
     }).format(new Date()));
     if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf) || calendarDay(asOf) === null) return res.status(400).json({ error: '统计日期不正确' });
     const candidates = db.prepare(`SELECT l.id, l.group_code, l.group_name, l.group_product_code,
-      l.product_code, l.product_name, l.group_product_account_id, l.manager_name,
+      l.product_name, l.group_product_account_id, l.manager_name,
       l.status_time, l.total_arrears, COALESCE(m.mark, 'unmarked') AS mark
       FROM ${leasedLineSource(req.query)} l LEFT JOIN line_warning_mark m ON m.line_id = l.id
       WHERE l.product_status_name = '停机' AND l.total_arrears > 0`).all();

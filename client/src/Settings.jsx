@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Copy, DatabaseBackup, Download, FilePlus2, History, KeyRound, ScrollText, ShieldCheck, ShieldOff, UserRound } from 'lucide-react';
+import { Copy, DatabaseBackup, Download, FilePlus2, History, KeyRound, ScrollText, ShieldCheck, ShieldOff, Trash2, UserRound } from 'lucide-react';
 import { apiBase, isAbort, jsonBody, requestJson } from './api.js';
 import { InlineError } from './components/Feedback.jsx';
 import { describeSource, isAlertEvent, securityEventLabels, securityLogCategories } from './securityLog.js';
@@ -221,6 +221,20 @@ function Backups({ reloadKey, onCode, onDataRestored }) {
     });
   }
 
+  function remove(item) {
+    onCode({
+      title: `删除备份：${beijingTime(item.createdAt)}`,
+      detail: `将永久删除这份备份（${labels[item.reason] || item.reason}${item.detail ? `，${item.detail}` : ''}），删除后无法恢复，也不能再回退到它。`,
+      confirm: '删除',
+      run: async (code) => {
+        await requestJson(`/settings/backups/${item.name}`, jsonBody('DELETE', { code }));
+        if (restored?.before?.name === item.name) setRestored(null);
+        setMessage(`已删除 ${beijingTime(item.createdAt)} 的备份`);
+        setRetry((value) => value + 1);
+      }
+    });
+  }
+
   const data = state.data;
   const labels = Object.fromEntries((data?.reasons || []).map((item) => [item.key, item.label]));
   const scopeLabels = Object.fromEntries((data?.scopes || []).map((item) => [item.key, item.label]));
@@ -284,6 +298,7 @@ function Backups({ reloadKey, onCode, onDataRestored }) {
                   <div className="settings-row-actions">
                     <button type="button" onClick={() => setRestoring({ backup: item })}><History size={14} /> 回退</button>
                     <button type="button" onClick={() => download(item)}><Download size={14} /> 下载</button>
+                    <button type="button" className="settings-danger" onClick={() => remove(item)}><Trash2 size={14} /> 删除</button>
                   </div>
                 </td>
               </tr>
