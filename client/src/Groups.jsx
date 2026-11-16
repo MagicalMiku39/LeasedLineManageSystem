@@ -1,7 +1,7 @@
 import React, { useEffect, useImperativeHandle, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, FileSpreadsheet, RefreshCw, Search, Upload, X } from 'lucide-react';
 import { apiBase, isAbort, jsonBody, requestJson } from './api.js';
-import { DataTable, Loader, Metric, Notice } from './GroupRevenue.jsx';
+import { arpuNote, arpuRule, DataTable, Loader, Metric, Notice } from './GroupRevenue.jsx';
 import { GroupedBars } from './charts.jsx';
 import { confidenceName } from './kpiRows.js';
 import Prospects from './Prospects.jsx';
@@ -149,15 +149,16 @@ function RevenueTrend({ code, revision }) {
   const rows = (state.data?.trend || []).filter((row) => row.totalRevenue != null || row.lineRevenue != null);
   return (
     <section className="rev-section">
-      <div className="rev-section-heading"><h3>收入</h3><span className="rev-caption">来自已导入的集团收入报表，税后</span></div>
+      <div className="rev-section-heading"><h3>收入</h3><span className="rev-caption">来自已导入的集团收入报表，税后 · 每月下方为当月专线 ARPU</span></div>
       {state.loading ? <Loader /> : rows.length ? (
         <GroupedBars
           label="月度集团收入与专线收入"
           series={[{ key: 'total', label: '集团收入' }, { key: 'line', label: '专线收入' }]}
           format={revenue}
-          rows={rows.map((row) => ({ key: row.month, label: row.month, sublabel: row.managerName, values: { total: row.totalRevenue, line: row.lineRevenue } }))}
+          rows={rows.map((row) => ({ key: row.month, label: row.month, sublabel: row.managerName, note: arpuNote(row), values: { total: row.totalRevenue, line: row.lineRevenue } }))}
         />
       ) : <p className="group-empty">{state.error || '已导入的收入报表中没有这个集团'}</p>}
+      {rows.length > 0 && <p className="rev-arpu-rule">{arpuRule}</p>}
     </section>
   );
 }
@@ -183,11 +184,16 @@ function Profile({ data, code, revision, onOpenLine }) {
         {group.strategicStatus && <span className={`rev-label strategic-status-${group.strategicStatus}`}>战客 · {strategicStatus[group.strategicStatus]}</span>}
       </div>
 
-      <section className="rev-metrics" aria-label="集团概览">
+      <section className="rev-metrics rev-metrics-five" aria-label="集团概览">
         <Metric label="在用专线" value={group.activeLines} note="正常在用、停机执行中、停机" />
         <Metric label="已销户专线" value={group.cancelledLines} />
         <Metric label="在用月资费" value={money(group.activeMonthlyFee)} note="实际月资费优先，否则活动套餐资费" />
         <Metric label="总欠费" value={money(group.totalArrears)} className={group.totalArrears > 0 ? 'rev-negative' : ''} />
+        <Metric
+          label={data.arpuMonth ? `专线 ARPU（${data.arpuMonth}）` : '专线 ARPU'}
+          value={group.arpu == null ? '—' : revenue(group.arpu)}
+          note={!data.arpuMonth ? '还没有导入收入报表' : group.arpu == null ? (group.arpuLineCount === null ? '这个月的收入报表中没有这个集团' : '月底没有在用专线，无法计算') : `专线收入 ÷ 月底在用专线 ${group.arpuLineCount} 条`}
+        />
       </section>
 
       {more && (
@@ -405,7 +411,7 @@ export default function Groups({ ref, kpiMode, refreshToken, onOpenLine, focus, 
           <section className="rev-section">
             <div className="rev-section-heading">
               <h3>集团 <span>{count(data.total)}</span></h3>
-              <span className="rev-caption">点击集团查看档案 · 有在用专线的排在前面</span>
+              <span className="rev-caption">点击集团查看档案 · 有在用专线的排在前面{data.arpuMonth ? ` · 专线 ARPU 为 ${data.arpuMonth} 的数` : ''}</span>
             </div>
             <div className="rev-group-filters group-filters">
               <label className="rev-search"><Search size={16} /><input aria-label="搜索集团" placeholder="集团名称、集团编码或客户经理" value={typed} onChange={(event) => setTyped(event.target.value)} /></label>
@@ -415,7 +421,7 @@ export default function Groups({ ref, kpiMode, refreshToken, onOpenLine, focus, 
             </div>
             <div className={`rev-table-scroll${list.loading ? ' group-loading' : ''}`} tabIndex={0} role="region" aria-label="集团列表">
               <table className="rev-table">
-                <thead><tr><th>集团</th><th>客户经理</th><th>级别</th><th className="rev-number">在用专线</th><th className="rev-number">已销户专线</th><th className="rev-number">台账专线合计</th></tr></thead>
+                <thead><tr><th>集团</th><th>客户经理</th><th>级别</th><th className="rev-number">专线 ARPU</th><th className="rev-number">在用专线</th><th className="rev-number">已销户专线</th><th className="rev-number">台账专线合计</th></tr></thead>
                 <tbody>
                   {data.rows.map((row) => (
                     <tr key={row.groupCode}>
@@ -428,12 +434,13 @@ export default function Groups({ ref, kpiMode, refreshToken, onOpenLine, focus, 
                       </td>
                       <td>{row.managerName || '—'}{row.managerMismatch && <small className="group-sub">清单：{row.directoryManager}</small>}</td>
                       <td>{row.level || '—'}</td>
+                      <td className="rev-number">{row.arpu == null ? '—' : <span className="rev-arpu-cell">{revenue(row.arpu)}<small>月底 {row.arpuLineCount} 条</small></span>}</td>
                       <td className="rev-number">{row.activeLines}</td>
                       <td className="rev-number">{row.cancelledLines}</td>
                       <td className="rev-number">{row.totalLines}</td>
                     </tr>
                   ))}
-                  {!data.rows.length && <tr><td colSpan="6" className="rev-empty-cell">{search || lines || mark || level ? '没有符合条件的集团' : '还没有集团'}</td></tr>}
+                  {!data.rows.length && <tr><td colSpan="7" className="rev-empty-cell">{search || lines || mark || level ? '没有符合条件的集团' : '还没有集团'}</td></tr>}
                 </tbody>
               </table>
             </div>

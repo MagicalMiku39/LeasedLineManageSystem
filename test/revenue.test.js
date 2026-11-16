@@ -12,7 +12,7 @@ import { toCents, netCents, productTaxRate, comparison, validMonth } from '../se
 import { parseRevenueWorkbook } from '../server/lib/revenue-import.js';
 import { createRevenueStore } from '../server/lib/revenue-store.js';
 import { createRevenueRouter } from '../server/lib/revenue.js';
-import { estimateLine } from '../server/lib/revenue-report.js';
+import { arpuOf, estimateLine, inServiceAtMonthEnd } from '../server/lib/revenue-report.js';
 
 function fixture(overrides = {}) {
   return { 月份: 202609, 集团编码: '001', 集团名称: '测试集团', 集团客户经理ID: 'M1', 集团客户经理: '张凯', 客户ID: 'C1',
@@ -123,6 +123,70 @@ test('missing prior periods, manager transfers and KPI preserve actual income de
   const detail = store.detail('001', { month: '2026-09', kpiMode: '0' });
   assert.equal(detail.reconciliation.netEstimate, 200); assert.equal(detail.reconciliation.status, 'insufficient'); assert.equal(detail.reconciliation.difference, null);
   assert.equal(detail.trend.length, 2); assert.equal(store.detail('001', { month: '2026-07' }).group.hasReport, false);
+});
+
+test('ARPU is a month\'s line revenue over the lines in service at that month\'s end', (t) => {
+  // Which lines count at a month's end, from the ledger as it is now.
+  const line = (state, start, statusTime) => ({ product_status_name: state, start_time: start, status_time: statusTime });
+  assert.equal(inServiceAtMonthEnd(line('正常在用', '2026-09-30 23:00:00'), '2026-09'), true, 'opened on the last day');
+  assert.equal(inServiceAtMonthEnd(line('正常在用', '2026-10-01 00:00:00'), '2026-09'), false, 'opened the day after');
+  assert.equal(inServiceAtMonthEnd(line('停机', '2025-01-01', '2026-08-01'), '2026-09'), true, 'stopped lines are still lines');
+  assert.equal(inServiceAtMonthEnd(line('停机执行中', '2025-01-01', '2026-09-10'), '2026-09'), true);
+  assert.equal(inServiceAtMonthEnd(line('正式销户', '2025-01-01', '2026-09-30 12:00:00'), '2026-09'), false, 'cancelled within the month');
+  assert.equal(inServiceAtMonthEnd(line('欠费销户', '2025-01-01', '2026-10-02'), '2026-09'), true, 'cancelled only after it');
+  assert.equal(inServiceAtMonthEnd(line('正式销户', '2025-01-01', null), '2026-09'), false, 'cancelled at an unknown time');
+  assert.equal(inServiceAtMonthEnd(line('临时生成资料', '2025-01-01'), '2026-09'), false, 'never in service');
+  assert.equal(inServiceAtMonthEnd(line('正常在用', null), '2026-09'), true, 'no start time: taken as already open');
+  assert.equal(inServiceAtMonthEnd(line('正常在用', '2026-12-31'), '2026-12'), true, 'December ends at the new year');
+  assert.equal(inServiceAtMonthEnd(line('正常在用', '2027-01-01'), '2026-12'), false);
+  assert.deepEqual([arpuOf(30000, 3), arpuOf(10000, 3), arpuOf(0, 2), arpuOf(100, 0), arpuOf(null, 3)], [100, 33.33, 0, null, null]);
+
+  const { db, store, load } = context(t);
+  const insert = db.prepare("INSERT INTO leased_line(group_code, group_name, group_product_code, product_name, product_status_name, start_time, status_time) VALUES (?, ?, ?, ?, ?, ?, ?)");
+  // Group 001: two lines all September; one opened in October; one cancelled in September; one outside the KPI products.
+  insert.run('001', '测试集团', 'A1', '互联网专线', '正常在用', '2025-01-01', null);
+  insert.run('001', '测试集团', 'A2', '互联网专线', '停机', '2025-01-01', '2026-08-15');
+  insert.run('001', '测试集团', 'A3', '互联网专线', '正常在用', '2026-10-05', null);
+  insert.run('001', '测试集团', 'A4', '互联网专线', '正式销户', '2025-01-01', '2026-09-20');
+  insert.run('001', '测试集团', 'A5', '传输专线', '正常在用', '2025-01-01', null);
+  // Group 002 has revenue and no line at all; group 003's only line was cancelled in October.
+  insert.run('003', '第三集团', 'C1', '互联网专线', '正式销户', '2025-01-01', '2026-10-10');
+  load([
+    fixture({ 计算后信息化收入: 300 }), fixture({ 产品大类ID: 'YUN', 产品大类名称: '云服务', 政企分类产品: '其他', 计算后信息化收入: 500 }),
+    fixture({ 集团编码: '002', 集团名称: '第二集团', 计算后信息化收入: 80 }),
+    fixture({ 集团编码: '003', 集团名称: '第三集团', 集团客户经理ID: 'M2', 集团客户经理: '王倩', 计算后信息化收入: 90 }),
+    fixture({ 月份: 202610, 计算后信息化收入: 330 }),
+    fixture({ 月份: 202610, 集团编码: '003', 集团名称: '第三集团', 集团客户经理ID: 'M2', 集团客户经理: '王倩', 计算后信息化收入: 45 })
+  ]);
+
+  const september = store.summary({ month: '2026-09', kpiMode: '1' });
+  const group = (data, code) => data.groups.find((row) => row.groupCode === code);
+  // Only line revenue counts (300, not the 500 of other products), over the 2 lines in service.
+  assert.deepEqual([group(september, '001').monthEndLineCount, group(september, '001').arpu], [2, 150]);
+  // Revenue with no line gives no ARPU rather than a made-up one; a line cancelled later still counts.
+  assert.deepEqual([group(september, '002').monthEndLineCount, group(september, '002').arpu], [0, null]);
+  assert.deepEqual([group(september, '003').monthEndLineCount, group(september, '003').arpu], [1, 90]);
+  // Together: 470 of line revenue over 3 lines; a manager's is over that manager's groups.
+  assert.deepEqual([september.summary.monthEndLineCount, september.summary.arpu], [3, 156.67]);
+  const manager = (data, id) => data.managers.find((row) => row.id === id);
+  assert.deepEqual([manager(september, 'M1').monthEndLineCount, manager(september, 'M1').arpu], [2, 190]);
+  assert.deepEqual([manager(september, 'M2').monthEndLineCount, manager(september, 'M2').arpu], [1, 90]);
+
+  // October: the new line counts, the one cancelled on the 10th no longer does.
+  const october = store.summary({ month: '2026-10', kpiMode: '1' });
+  assert.deepEqual([group(october, '001').monthEndLineCount, group(october, '001').arpu], [3, 110]);
+  assert.deepEqual([group(october, '003').monthEndLineCount, group(october, '003').arpu], [0, null]);
+  assert.deepEqual(october.trend.map((row) => [row.month, row.monthEndLineCount, row.arpu]), [['2026-09', 3, 156.67], ['2026-10', 3, 125]]);
+
+  // The KPI switch chooses which lines are counted, as everywhere else.
+  assert.deepEqual([group(store.summary({ month: '2026-09', kpiMode: '0' }), '001').monthEndLineCount, group(store.summary({ month: '2026-09', kpiMode: '0' }), '001').arpu], [3, 100]);
+
+  const detail = store.detail('001', { month: '2026-10', kpiMode: '1' });
+  assert.deepEqual([detail.group.monthEndLineCount, detail.group.arpu], [3, 110]);
+  assert.deepEqual(detail.trend.map((row) => [row.month, row.monthEndLineCount, row.arpu]), [['2026-09', 2, 150], ['2026-10', 3, 110]]);
+  // A month the group has no report for has no ARPU, even with lines.
+  const quiet = store.detail('002', { month: '2026-10', kpiMode: '1' });
+  assert.deepEqual([quiet.group.hasReport, quiet.group.arpu], [false, null]);
 });
 
 test('service confirmations, idempotent retries, revisions, version checks and soft-delete prevent double counting', (t) => {

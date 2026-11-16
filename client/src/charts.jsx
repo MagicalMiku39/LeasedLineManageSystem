@@ -280,7 +280,7 @@ export function GroupedBars({ rows, series, format = String, label }) {
                   return <i key={item.key} className={`grouped-bar grouped-${item.key}${value < 0 ? ' grouped-negative' : ''}${value ? ' grouped-some' : ''}`} style={{ height: height(value) }} title={`${item.label} ${format(value)}`} />;
                 })}
               </span>
-              <span className="grouped-label">{row.label}{row.sublabel && <small>{row.sublabel}</small>}</span>
+              <span className="grouped-label">{row.label}{row.sublabel && <small>{row.sublabel}</small>}{row.note && <small className="grouped-note">{row.note}</small>}</span>
             </div>
           ))}
         </div>

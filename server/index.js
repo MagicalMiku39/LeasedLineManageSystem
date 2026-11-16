@@ -873,10 +873,19 @@ app.get('/api/manager-performance', (req, res) => {
        ORDER BY ${sortColumn} DESC, manager_name ASC`
     ).all(...selectedManagers, ...metricParams);
 
+    // 专线 ARPU for the chosen month, by the manager the revenue report names for each group.
+    const arpu = revenueRouter.arpu(req.query, period.month);
+    for (const row of rows) {
+      const entry = arpu.managers.get(row.manager_name);
+      row.arpu = entry?.arpu ?? null;
+      row.arpu_line_count = entry?.monthEndLineCount ?? null;
+    }
+
     res.json({
       month: period.month,
       year: period.year,
       quarter: period.quarter,
+      arpuMonth: arpu.month,
       selectedManagers,
       sort: req.query.sort || 'yearScaleNet',
       kpiMode: isKpiMode(req.query),
@@ -1052,7 +1061,8 @@ app.get('/api/stats', (req, res) => {
   });
 });
 
-app.use('/api/revenue', createRevenueRouter({ db, uploadDir, leasedLineSource }));
+const revenueRouter = createRevenueRouter({ db, uploadDir, leasedLineSource });
+app.use('/api/revenue', revenueRouter);
 app.use('/api/warnings', createWarningsRouter({ db, leasedLineSource, currentUser, fillLinks: shareService.forMail }));
 const clientCertFiles = clientCertPaths();
 const clientCertListener = createClientCertListener({ app, paths: clientCertFiles });
@@ -1089,6 +1099,7 @@ app.use('/api/groups', createGroupsRouter({
   leasedLineSource,
   currentUser,
   normalizeFileName: normalizeUploadedFilename,
+  arpu: (query) => revenueRouter.arpu(query),
   beforeReplace: (req, fileName) => backups.create('group-import', { detail: fileName, createdBy: currentUser(req)?.username || '' })
 }));
 app.use('/api/workbench', createWorkbenchRouter({ db, leasedLineSource, kpi: kpiRouter, strategic: strategicRouter, repairName: repairMojibake }));

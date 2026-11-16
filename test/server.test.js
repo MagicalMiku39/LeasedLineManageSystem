@@ -2146,6 +2146,58 @@ test('the lettered product code is stored but not shown: not in exports, searche
   db.exec("DELETE FROM warning_mail_delivery WHERE line_id IN (SELECT id FROM leased_line WHERE group_code = 'PC001'); DELETE FROM warning_mail_digest; DELETE FROM leased_line WHERE group_code = 'PC001'; DELETE FROM warning_mail_contact WHERE manager_key = 'job:PCJ'");
 });
 
+test('the group pages and the manager page show ARPU from the revenue report', async () => {
+  const insert = db.prepare(`INSERT INTO leased_line (group_code, group_name, group_product_code, product_name, product_status_name, ledger_status, manager_name, start_time, status_time, updated_at)
+    VALUES (?, ?, ?, '互联网专线', ?, ?, ?, ?, ?, ?)`);
+  const line = (group, code, status, manager, start, statusTime = null) => insert.run(group, `台账${group}`, code, status, status, manager, start, statusTime, nowIso());
+  line('AR001', 'ARL1', '正常在用', '收入经理', '2025-01-01');
+  line('AR001', 'ARL2', '正常在用', '收入经理', '2025-01-01');
+  line('AR001', 'ARL3', '正式销户', '收入经理', '2025-01-01', '2031-03-20');
+  line('AR002', 'ARL4', '正常在用', '收入经理', '2025-01-01');
+  line('AR003', 'ARL5', '正常在用', '别的收入经理', '2025-01-01');
+  const row = (extra) => ({ 月份: 203103, 集团编码: 'AR001', 集团名称: '收入集团一', 集团客户经理ID: 'RM1', 集团客户经理: '收入经理', 产品大类ID: 'HLZX', 产品大类名称: '互联网专线',
+    政企分类产品: '专线', 出账金额: '0', 税费: '0', 调账金额: '0', 调账税费: '0', 计算后信息化收入: 0, ...extra });
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet([
+    row({ 计算后信息化收入: 500 }),
+    row({ 政企分类产品: '其他', 产品大类ID: 'YUN', 产品大类名称: '云服务', 计算后信息化收入: 900 }),
+    row({ 集团编码: 'AR002', 集团名称: '收入集团二', 计算后信息化收入: 100 }),
+    row({ 月份: 203102, 计算后信息化收入: 300 })
+  ]), 'BOSS');
+  const form = new FormData();
+  form.append('file', new Blob([XLSX.write(book, { type: 'buffer', bookType: 'xlsx' })]), '收入.xlsx');
+  const preview = await (await request('/api/revenue/imports/preview', { method: 'POST', body: form })).json();
+  assert.equal((await request(`/api/revenue/imports/${preview.id}/commit`, { method: 'POST', body: { replace: true } })).status, 200);
+
+  // The group list and the profile carry the latest reported month's ARPU.
+  const list = await (await request('/api/groups?kpiMode=0&search=AR00')).json();
+  const byCode = Object.fromEntries(list.rows.map((item) => [item.groupCode, item]));
+  assert.equal(list.arpuMonth, '2031-03');
+  // 500 of line revenue over the 2 lines still in service at the end of March.
+  assert.deepEqual([byCode.AR001.arpu, byCode.AR001.arpuLineCount], [250, 2]);
+  assert.deepEqual([byCode.AR002.arpu, byCode.AR002.arpuLineCount], [100, 1]);
+  // In the ledger but not in the report: no figure, rather than zero.
+  assert.deepEqual([byCode.AR003.arpu, byCode.AR003.arpuLineCount], [null, null]);
+  const profile = await (await request('/api/groups/AR001?kpiMode=0')).json();
+  assert.deepEqual([profile.arpuMonth, profile.group.arpu, profile.group.arpuLineCount], ['2031-03', 250, 2]);
+
+  // The manager page: the chosen month's line revenue over that manager's lines at its end.
+  const managers = async (month) => (await request(`/api/manager-performance?kpiMode=0&month=${month}&managers=${encodeURIComponent('收入经理|别的收入经理')}`)).json();
+  const march = await managers('2031-03');
+  const named = (data, name) => data.rows.find((item) => item.manager_name === name);
+  assert.equal(march.arpuMonth, '2031-03');
+  assert.deepEqual([named(march, '收入经理').arpu, named(march, '收入经理').arpu_line_count], [200, 3]);
+  assert.deepEqual([named(march, '别的收入经理').arpu, named(march, '别的收入经理').arpu_line_count], [null, null]);
+  // February: the line cancelled in March still counted then.
+  const february = await managers('2031-02');
+  assert.deepEqual([named(february, '收入经理').arpu, named(february, '收入经理').arpu_line_count], [100, 3]);
+  // A month with no report says so instead of showing numbers.
+  const january = await managers('2031-01');
+  assert.deepEqual([january.arpuMonth, named(january, '收入经理').arpu], [null, null]);
+
+  db.exec("DELETE FROM revenue_source_row; DELETE FROM revenue_batch_month; DELETE FROM revenue_batch; DELETE FROM leased_line WHERE group_product_code LIKE 'ARL%'");
+});
+
 test('logout invalidates the session cookie', async () => {
   const response = await request('/api/auth/logout', { method: 'POST' });
   assert.equal(response.status, 200);

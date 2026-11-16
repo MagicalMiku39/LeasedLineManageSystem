@@ -44,10 +44,15 @@ export function Loader() {
 export function Metric({ label, value, note, className = '' }) {
   return <div className={`rev-metric ${className}`}><span>{label}</span><strong>{value}</strong>{note && <small>{note}</small>}</div>;
 }
+// What the ARPU figure is, in one line, wherever it is shown.
+export const arpuRule = '专线 ARPU = 当月报表专线收入 ÷ 当月月底在用专线数（正常在用、停机执行中、停机）。月底专线数按台账现在的开始时间和状态时间推算，跟随 KPI统计模式。';
+export const arpuNote = (row) => (row.arpu == null ? (row.monthEndLineCount > 0 ? null : '月底无在用专线') : `ARPU ${format(row.arpu)}`);
+
 function Metrics({ data }) {
-  return <section className="rev-metrics" aria-label="收入概览">
+  return <section className="rev-metrics rev-metrics-five" aria-label="收入概览">
     <Metric label="集团信息化收入" value={format(data.totalRevenue)} note={`报表 ${format(data.reportRevenue ?? data.totalRevenue)} · 补录 ${format(data.supplementRevenue ?? 0)}`} />
     <Metric label="报表专线收入" value={format(data.lineRevenue)} note="报表专线分类" />
+    <Metric label="专线 ARPU" value={format(data.arpu)} note={data.monthEndLineCount > 0 ? `专线收入 ÷ 月底在用专线 ${data.monthEndLineCount} 条` : '月底没有在用专线，无法计算'} />
     <Metric label="专线收入占比" value={percent(data.lineShare ?? (data.totalRevenue > 0 ? data.lineRevenue / data.totalRevenue : null))} note="集团全部产品收入为分母" />
     <Metric label="较上月变化" value={signed(data.change)} className={tone(data.change)} note={data.previousRevenue == null ? '上月无可比较记录' : `上月 ${format(data.previousRevenue)} · ${data.previousRevenue <= 0 ? '非正基期' : percent(data.changeRate)}`} />
   </section>;
@@ -85,13 +90,15 @@ const trendSeries = [{ key: 'total', label: '集团收入' }, { key: 'line', lab
 // Month by month, the shared chart style; values stay printed at the right of each month.
 function Trend({ rows }) {
   return <section className="rev-trend" aria-label="月度收入趋势">
-    <div className="rev-section-heading"><h3>收入趋势</h3></div>
+    <div className="rev-section-heading"><h3>收入趋势</h3><span className="rev-caption">每月下方为当月专线 ARPU</span></div>
     <GroupedBars label="月度集团收入与专线收入" series={trendSeries} format={format} rows={rows.map((row, index) => ({
       key: `${row.month}-${row.managerName || ''}-${index}`,
       label: row.month,
       sublabel: row.managerName,
+      note: arpuNote(row),
       values: { total: row.totalRevenue, line: row.lineRevenue }
     }))} />
+    <p className="rev-arpu-rule">{arpuRule}</p>
   </section>;
 }
 
@@ -268,6 +275,7 @@ export default function GroupRevenue({ ref, onExportReady, kpiMode, defaultManag
     { key: 'totalRevenue', label: '集团收入', numeric: true, render: (row) => format(row.totalRevenue) },
     { key: 'lineRevenue', label: '专线收入', numeric: true, render: (row) => format(row.lineRevenue) },
     { key: 'lineShare', label: '专线占比', numeric: true, render: (row) => percent(row.lineShare) },
+    { key: 'arpu', label: '专线 ARPU', numeric: true, render: (row) => <span className="rev-arpu-cell">{format(row.arpu)}<small>月底 {row.monthEndLineCount} 条</small></span> },
     { key: 'previousRevenue', label: '上月收入', numeric: true, render: (row) => format(row.previousRevenue) },
     { key: 'change', label: '变化金额', numeric: true, render: (row) => <span className={tone(row.change)}>{signed(row.change)}</span> },
     { key: 'changeRate', label: '环比', numeric: true, render: (row) => percent(row.changeRate) }
@@ -285,9 +293,9 @@ export default function GroupRevenue({ ref, onExportReady, kpiMode, defaultManag
       setError('');
       try {
         const XLSX = await import('xlsx');
-        const incomeFields = [['totalRevenue', '集团信息化收入'], ['lineRevenue', '报表专线收入'], ['lineShare', '专线占比'], ['previousRevenue', '上月收入'], ['change', '变化金额'], ['changeRate', '环比']];
+        const incomeFields = [['totalRevenue', '集团信息化收入'], ['lineRevenue', '报表专线收入'], ['lineShare', '专线占比'], ['monthEndLineCount', '月底在用专线数'], ['arpu', '专线ARPU'], ['previousRevenue', '上月收入'], ['change', '变化金额'], ['changeRate', '环比']];
         const fields = group
-          ? [['productId', '产品大类ID'], ['productName', '产品名称'], ['category', '收入分类'], ['revenue', '本月收入'], ...incomeFields.slice(3)]
+          ? [['productId', '产品大类ID'], ['productName', '产品名称'], ['category', '收入分类'], ['revenue', '本月收入'], ...incomeFields.slice(5)]
           : view === 'history'
             ? [['fileName', '文件名称'], ['months', '收入月份'], ['rowCount', '明细行数'], ['status', '批次状态'], ['activeMonths', '当前有效月份'], ['createdBy', '操作人'], ['createdAt', '导入时间']]
             : view === 'groups'
@@ -298,7 +306,7 @@ export default function GroupRevenue({ ref, onExportReady, kpiMode, defaultManag
         const sheet = XLSX.utils.json_to_sheet(rows);
         fields.forEach(([key], column) => {
           const format = ['lineShare', 'changeRate'].includes(key) ? '0.00%'
-            : ['totalRevenue', 'lineRevenue', 'supplementRevenue', 'previousRevenue', 'revenue', 'change'].includes(key) ? '#,##0.00' : null;
+            : ['totalRevenue', 'lineRevenue', 'arpu', 'supplementRevenue', 'previousRevenue', 'revenue', 'change'].includes(key) ? '#,##0.00' : null;
           if (!format) return;
           rows.forEach((_, index) => {
             const cell = sheet[XLSX.utils.encode_cell({ r: index + 1, c: column })];

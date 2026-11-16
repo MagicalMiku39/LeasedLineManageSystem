@@ -25,6 +25,30 @@ export function createRevenueRouter({ db, uploadDir, leasedLineSource }) {
     return user.username;
   }
 
+  /**
+   * ARPU for the other pages, by group code and by manager name, for one month (the latest with
+   * a report when none is given). A month with no report gives empty maps and `month: null`.
+   */
+  router.arpu = (query = {}, month) => {
+    const empty = { month: null, groups: new Map(), managers: new Map() };
+    try {
+      const period = month || store.meta().months[0];
+      if (!period || !store.meta().months.includes(period)) return empty;
+      const data = store.summary({ kpiMode: query.kpiMode, month: period });
+      const managers = new Map();
+      for (const row of data.managers) {
+        const entry = managers.get(row.name) || { lineRevenue: 0, monthEndLineCount: 0 };
+        entry.lineRevenue += row.lineRevenue ?? 0;
+        entry.monthEndLineCount += row.monthEndLineCount;
+        managers.set(row.name, entry);
+      }
+      for (const entry of managers.values()) entry.arpu = entry.monthEndLineCount > 0 ? Math.round((entry.lineRevenue / entry.monthEndLineCount) * 100) / 100 : null;
+      return { month: period, groups: new Map(data.groups.map((row) => [row.groupCode, { arpu: row.arpu, monthEndLineCount: row.monthEndLineCount }])), managers };
+    } catch {
+      return empty;
+    }
+  };
+
   router.get('/meta', (req, res) => res.json(store.meta()));
   router.post('/imports/preview', upload.single('file'), (req, res) => {
     if (!req.file) fail('请选择 Excel 文件');

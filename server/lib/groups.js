@@ -239,11 +239,16 @@ export function strategicCustomerSource(db) {
  * managers the ledger wins, and the difference is reported; a group with no lines keeps the
  * list's manager. Line counts follow the KPI switch like everywhere else.
  */
-export function createGroupsRouter({ db, leasedLineSource, currentUser, normalizeFileName = (name) => name, beforeReplace = async () => null }) {
+export function createGroupsRouter({ db, leasedLineSource, currentUser, normalizeFileName = (name) => name, beforeReplace = async () => null, arpu = () => ({ month: null, groups: new Map() }) }) {
   const router = Router();
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: maxUploadMb * 1024 * 1024, files: 1, fields: 0 } });
   const previews = new Map();
   ensureGroupDirectory(db);
+  // 专线 ARPU of the latest month with a revenue report, added to the rows a page shows.
+  const withArpu = (rows, query) => {
+    const latest = arpu(query);
+    return { arpuMonth: latest.month, rows: rows.map((row) => ({ ...row, arpu: latest.groups.get(row.groupCode)?.arpu ?? null, arpuLineCount: latest.groups.get(row.groupCode)?.monthEndLineCount ?? null })) };
+  };
 
   const status = "COALESCE(l.product_status_name, l.ledger_status, '')";
   const monthlyFee = 'CASE WHEN COALESCE(l.actual_monthly_fee, 0) > 0 THEN l.actual_monthly_fee ELSE COALESCE(l.package_fee, 0) END';
@@ -345,7 +350,7 @@ export function createGroupsRouter({ db, leasedLineSource, currentUser, normaliz
         COALESCE(SUM(strategic), 0) AS strategic,
         COALESCE(SUM(CASE WHEN keyCategory IS NOT NULL THEN 1 ELSE 0 END), 0) AS keyCustomers
       FROM unified`).get(...statusParams);
-    res.json({ list: lastImport(), strategicFrom: strategicCustomerSource(db).from, summary, total, page, pageSize, rows });
+    res.json({ list: lastImport(), strategicFrom: strategicCustomerSource(db).from, summary, total, page, pageSize, ...withArpu(rows, req.query) });
   });
 
   /**
@@ -631,8 +636,10 @@ export function createGroupsRouter({ db, leasedLineSource, currentUser, normaliz
          FROM kpi_forecast f WHERE f.group_code = ? ORDER BY f.year DESC, f.month DESC, f.id DESC LIMIT 30`
       ).all(code)
       : [];
-    const group = view(row);
+    const priced = withArpu([view(row)], req.query);
+    const group = priced.rows[0];
     res.json({
+      arpuMonth: priced.arpuMonth,
       group: {
         ...group,
         strategicStatus: group.strategic ? (group.activeLines > 0 ? 'penetrated' : group.cancelledLines > 0 ? 'lost' : 'untouched') : null,

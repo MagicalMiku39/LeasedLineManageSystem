@@ -1,3 +1,4 @@
+import { billableStatuses, cancelledStatuses } from './ledger-rules.js';
 import { addCents, comparison, fail, money, netCents, previousMonth, productTaxRate, safeCents, share, toCents, validMonth } from './revenue-money.js';
 
 const status = (line) => line.product_status_name ?? line.ledger_status ?? '';
@@ -8,6 +9,27 @@ const viewService = (row) => {
   return { ...data, id: row.id, version: row.version, grossAmount: money(data.grossCents), revenue: money(data.netCents),
     taxRate: 0.06, createdBy: row.created_by, updatedBy: row.updated_by, createdAt: row.created_at, updatedAt: row.updated_at };
 };
+
+/**
+ * Whether a line was in service at the end of a month, read from the ledger as it is now: it
+ * had started by then, and it is in service today or was cancelled only after that month. The
+ * system keeps no month-end snapshots, so a line whose dates were changed later counts by its
+ * new dates. A line in service with no start time counts as already open.
+ */
+export function inServiceAtMonthEnd(line, month) {
+  const [year, number] = month.split('-').map(Number);
+  const next = number === 12 ? `${year + 1}-01-01` : `${year}-${String(number + 1).padStart(2, '0')}-01`;
+  const state = status(line);
+  const cancelled = cancelledStatuses.includes(state);
+  if (!cancelled && !billableStatuses.includes(state)) return false;
+  if (line.start_time && String(line.start_time) >= next) return false;
+  return !cancelled || (Boolean(line.status_time) && String(line.status_time) >= next);
+}
+
+/** 专线 ARPU: a month's line revenue over the lines in service at that month's end. */
+export function arpuOf(lineCents, lineCount) {
+  return lineCents === null || lineCents === undefined || !(lineCount > 0) ? null : money(Math.round(lineCents / lineCount));
+}
 
 export function estimateLine(line, month) {
   const billable = status(line) === '正常在用'
@@ -73,7 +95,24 @@ export function createRevenueQueries({ db, leasedLineSource }) {
       SUM(CASE WHEN COALESCE(product_status_name, ledger_status, '') = '正常在用' THEN 1 ELSE 0 END) AS active
       FROM ${leasedLineSource(query)} GROUP BY group_code`).all().map((row) => [row.group_code, row]));
     const matchedGroups = new Set(db.prepare("SELECT DISTINCT group_code FROM leased_line WHERE group_code <> ''").all().map((row) => row.group_code));
-    return { months, month, batches, services, aggregates, indexed, lineCounts, matchedGroups };
+    // Lines in service at each month's end, per group, worked out once per month asked for.
+    const dated = db.prepare(`SELECT group_code, product_status_name, ledger_status, start_time, status_time
+      FROM ${leasedLineSource(query)} WHERE COALESCE(group_code, '') <> ''`).all();
+    const monthEnds = new Map();
+    const linesAt = (period, groupCode) => {
+      if (!monthEnds.has(period)) {
+        const counts = new Map();
+        for (const line of dated) if (inServiceAtMonthEnd(line, period)) counts.set(line.group_code, (counts.get(line.group_code) || 0) + 1);
+        monthEnds.set(period, counts);
+      }
+      return monthEnds.get(period).get(groupCode) || 0;
+    };
+    // A set of groups' ARPU for a month: their line revenue together over their lines together.
+    const arpuFor = (rows, period) => {
+      const lineCount = rows.reduce((total, row) => total + linesAt(period, row.groupCode), 0);
+      return { monthEndLineCount: lineCount, arpu: rows.length ? arpuOf(sum(rows, 'lineCents'), lineCount) : null };
+    };
+    return { months, month, batches, services, aggregates, indexed, lineCounts, matchedGroups, linesAt, arpuFor };
   }
 
   function groupView(group, ctx, month) {
@@ -81,6 +120,7 @@ export function createRevenueQueries({ db, leasedLineSource }) {
     return { groupCode: group.groupCode, groupName: group.groupName, managerId: group.managerId, managerName: group.managerName,
       reportRevenue: money(group.reportCents), totalRevenue: money(group.totalCents), lineRevenue: money(group.lineCents),
       supplementRevenue: money(group.supplementCents), lineShare: share(group.lineCents, group.totalCents),
+      ...ctx.arpuFor([group], month),
       currentLineCount: ctx.lineCounts.get(group.groupCode)?.active ?? 0, currentTotalLineCount: ctx.lineCounts.get(group.groupCode)?.total ?? 0,
       matched: ctx.matchedGroups.has(group.groupCode), needsReviewCount: group.needsReviewCount, hasReport: true,
       managerChanged: Boolean(before && before.managerId !== group.managerId), previousManagerName: before?.managerName ?? null,
@@ -108,7 +148,7 @@ export function createRevenueQueries({ db, leasedLineSource }) {
       const value = sum(rows, 'totalCents'), line = sum(rows, 'lineCents');
       return { id, name: rows[0].managerName || '未填写客户经理', groupCount: rows.length,
         totalRevenue: money(value), lineRevenue: money(line), supplementRevenue: money(sum(rows, 'supplementCents')),
-        lineShare: share(line, value), ...comparison(value, nullableSum(older, 'totalCents')) };
+        lineShare: share(line, value), ...ctx.arpuFor(rows, month), ...comparison(value, nullableSum(older, 'totalCents')) };
     });
     const ungrouped = db.prepare(`SELECT COALESCE(SUM(json_extract(r.data_json, '$.revenue')),0) AS total FROM revenue_source_row r
       JOIN revenue_batch_month b ON b.batch_id = r.batch_id AND b.month = r.month AND b.active = 1
@@ -117,11 +157,12 @@ export function createRevenueQueries({ db, leasedLineSource }) {
       summary: { totalRevenue: money(total), reportRevenue: ctx.batches.has(month) ? money(sum(current, 'reportCents')) : null,
         lineRevenue: ctx.batches.has(month) ? money(sum(current, 'lineCents')) : null,
         supplementRevenue: money(sum(current, 'supplementCents')), groupCount: current.length,
+        ...ctx.arpuFor(current, month),
         ungroupedRevenue: money(ungrouped), ungroupedScope: '全报表', ...comparison(total, previous) },
       managers, groups: current.map((row) => groupView(row, ctx, month)),
       trend: ctx.months.map(({ month: period }) => {
         const scoped = ctx.aggregates.filter((row) => row.month === period && inScope(row));
-        return { month: period, totalRevenue: money(nullableSum(scoped, 'totalCents')), lineRevenue: money(nullableSum(scoped, 'lineCents')) };
+        return { month: period, totalRevenue: money(nullableSum(scoped, 'totalCents')), lineRevenue: money(nullableSum(scoped, 'lineCents')), ...ctx.arpuFor(scoped, period) };
       }).reverse() };
   }
 
@@ -135,6 +176,7 @@ export function createRevenueQueries({ db, leasedLineSource }) {
     const group = current ? groupView(current, ctx, month) : { groupCode: code, groupName: history.at(-1).groupName,
       managerName: null, managerId: null, hasReport: false, totalRevenue: null, lineRevenue: null, reportRevenue: null,
       supplementRevenue: 0, lineShare: null, previousRevenue: null, change: null, changeRate: null,
+      monthEndLineCount: ctx.linesAt(month, code), arpu: null,
       currentLineCount: ctx.lineCounts.get(code)?.active ?? 0, matched: ctx.matchedGroups.has(code) };
     const getRows = (period) => db.prepare(`SELECT r.id, r.data_json FROM revenue_source_row r
       JOIN revenue_batch_month b ON b.batch_id = r.batch_id AND b.month = r.month AND b.active = 1
@@ -196,7 +238,8 @@ export function createRevenueQueries({ db, leasedLineSource }) {
     return { group, products, lines, services,
       trend: ctx.months.slice().reverse().map(({ month: period }) => {
         const row = ctx.indexed.get(JSON.stringify([period, code]));
-        return { month: period, totalRevenue: money(row?.totalCents ?? null), lineRevenue: money(row?.lineCents ?? null), managerName: row?.managerName ?? null };
+        return { month: period, totalRevenue: money(row?.totalCents ?? null), lineRevenue: money(row?.lineCents ?? null), managerName: row?.managerName ?? null,
+          monthEndLineCount: ctx.linesAt(period, code), arpu: row ? arpuOf(row.lineCents, ctx.linesAt(period, code)) : null };
       }),
       sourceRows: rows.map((row) => ({ ...row, gross: money(row.gross), tax: money(row.tax), adjustment: money(row.adjustment),
         adjustmentTax: money(row.adjustmentTax), revenue: money(row.revenue) })),

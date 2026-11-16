@@ -1904,6 +1904,12 @@ button.segment {
   text-align: center;
 }
 
+.grouped-label .grouped-note {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .grouped-label small {
   display: block;
   margin-top: 2px;
