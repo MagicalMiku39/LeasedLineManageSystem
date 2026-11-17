@@ -2,6 +2,7 @@ import React, { useEffect, useImperativeHandle, useMemo, useRef, useState } from
 import { Check, ListChecks, Pencil, Plus, Search, Trash2, Undo2, UsersRound } from 'lucide-react';
 import { isAbort, jsonBody, requestJson } from './api.js';
 import { InlineError } from './components/Feedback.jsx';
+import KpiForecastEdit from './KpiForecastEdit.jsx';
 import KpiProgress from './KpiProgress.jsx';
 import { confidenceName, confidenceOrder, forecastState, gapSteps, kpiManagerRows } from './kpiRows.js';
 import { dataFreshness } from './ledgerChanges.js';
@@ -185,6 +186,9 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
     }
   }
 
+  // The forecast whose edit form is open.
+  const [editing, setEditing] = useState(null);
+
   async function changeForecast(row, request) {
     setBusyId(row.id);
     setError('');
@@ -350,6 +354,9 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
       </td>
       <td className="kpi-actions-cell" onClick={(event) => event.stopPropagation()}>
         <div className="kpi-row-actions">
+          <button type="button" disabled={busyId !== null} title="修改月份、条数、产品类型、把握度或集团" onClick={() => setEditing(row)}>
+            <Pencil size={14} /> 修改
+          </button>
           <button
             type="button"
             disabled={busyId !== null}
@@ -710,6 +717,16 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
         {suggestionTotal > 0 && <p className="kpi-suggestion-note" role="status">导入后发现可能对应预计任务的专线，点击带标记的任务确认。确认前不会改动任何数字。</p>}
         <p className="operations-rule">预计年度净增 = 当前净增 + 预计新增 − 预计销户，只计尚未落地的条数。点击一行可以查看和更新进展；专线实际开通或销户、已体现在台账中后，请填写已落地条数，或点“已落地”“已销户”表示全部完成，避免重复计算。</p>
       </section>
+      {editing && (
+        <KpiForecastEdit
+          row={editing}
+          months={data?.months || []}
+          productTypes={data?.productTypes || []}
+          currentYear={data?.year}
+          onClose={() => setEditing(null)}
+          onSaved={() => { setEditing(null); reload(); }}
+        />
+      )}
       {progressId !== null && <KpiProgress forecastId={progressId} onClose={() => setProgressId(null)} onChanged={reload} />}
     </>
   );

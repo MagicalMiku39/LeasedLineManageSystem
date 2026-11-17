@@ -332,3 +332,16 @@ button.group-link:hover { background: none; box-shadow: none; text-decoration: u
 .warning-digest-link span { display: grid; gap: 3px; min-width: 0; }
 .warning-digest-link small { color: #686d76; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
 .share-sources { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; font-weight: 400; }
+
+/* ---------- 修改预计任务 ---------- */
+.kpi-edit-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.kpi-edit-fields label { display: grid; gap: 6px; min-width: 0; margin: 0; font-size: 13px; }
+.kpi-edit-fields input, .kpi-edit-fields select { width: 100%; min-width: 0; }
+.kpi-edit-fields small { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.kpi-edit-fields small.kpi-edit-warn { color: var(--red); }
+.kpi-edit-wide { grid-column: 1 / -1; }
+.kpi-edit-note { margin: 14px 0 0; font-size: 12px; line-height: 1.6; }
+.kpi-edit-dialog .kpi-form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
+@media (max-width: 520px) {
+  .kpi-edit-fields { grid-template-columns: minmax(0, 1fr); }
+}

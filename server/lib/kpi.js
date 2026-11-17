@@ -119,7 +119,7 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
        FROM leased_line
        WHERE group_code = ?
        GROUP BY group_name, manager_name
-       ORDER BY line_count DESC, latest DESC
+       ORDER BY line_count DESC, latest DESC, manager_name ASC
        LIMIT 1`
     ).get(groupCode) || null;
   }
@@ -316,7 +316,9 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     for (const row of rows) {
       if (seen.has(row.group_code)) continue;
       seen.add(row.group_code);
-      groups.push({ group_code: row.group_code, group_name: row.group_name, manager_name: row.manager_name, source: 'ledger' });
+      // The same choice a saved forecast makes, so what the form shows is what gets kept.
+      const chosen = ledgerGroup(row.group_code) || row;
+      groups.push({ group_code: row.group_code, group_name: chosen.group_name, manager_name: chosen.manager_name, source: 'ledger' });
       if (groups.length >= groupMatchLimit) break;
     }
     const listed = db.prepare(
@@ -405,7 +407,29 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     if (Object.hasOwn(body, 'line_count')) {
       lineCount = Number(body.line_count);
       if (!Number.isSafeInteger(lineCount) || lineCount <= 0) return res.status(400).json({ error: '预计条数须为正整数' });
-      if (lineCount < landedCount) return res.status(400).json({ error: `已落地 ${landedCount} 条，预计条数不能更少` });
+      if (lineCount < landedCount) return res.status(400).json({ error: `已${existing.kind === 'cancelled' ? '销户' : '落地'} ${landedCount} 条，预计条数不能更少` });
+      if (lineCount !== existing.line_count) notes.push(`预计条数：${existing.line_count} → ${lineCount}`);
+    }
+    let productType = existing.product_type;
+    if (Object.hasOwn(body, 'product_type')) {
+      const next = String(body.product_type ?? '').trim();
+      if (!productTypes.includes(next)) return res.status(400).json({ error: '请选择产品类型' });
+      if (next !== productType) notes.push(`产品类型：${productType} → ${next}`);
+      productType = next;
+    }
+    // A forecast entered against the wrong group can be moved to the right one, as long as the
+    // ledger or the full group list knows it; its name and manager follow the group.
+    let group = { code: existing.group_code, name: existing.group_name, manager: existing.manager_name };
+    if (Object.hasOwn(body, 'group_code')) {
+      const code = String(body.group_code ?? '').trim();
+      if (!code) return res.status(400).json({ error: '请填写集团编码' });
+      if (code !== existing.group_code) {
+        const known = ledgerGroup(code) || directoryGroup(code);
+        if (!known) return res.status(400).json({ error: '台账和全量集团清单中都没有这个集团编码，不能改到这个集团' });
+        notes.push(`集团：${existing.group_name}（${existing.group_code}）→ ${known.group_name}（${code}）`);
+        if (known.manager_name && known.manager_name !== existing.manager_name) notes.push(`客户经理：${existing.manager_name} → ${known.manager_name}`);
+        group = { code, name: known.group_name, manager: known.manager_name || existing.manager_name };
+      }
     }
     // The one-click shortcut: everything landed, or back to all forecast. It leaves a trace too.
     if (Object.hasOwn(body, 'landed')) {
@@ -422,7 +446,12 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
       username: currentUser(req)?.username || '',
       // Back to all forecast: lines confirmed for it are free to be suggested again.
       alsoInTransaction: () => {
-        db.prepare('UPDATE kpi_forecast SET confidence = ?, year = ?, month = ? WHERE id = ?').run(confidence, year, month, id);
+        db.prepare('UPDATE kpi_forecast SET confidence = ?, year = ?, month = ?, product_type = ?, group_code = ?, group_name = ?, manager_name = ? WHERE id = ?')
+          .run(confidence, year, month, productType, group.code, group.name, group.manager, id);
+        // Lines suggested for the old group or product say nothing about the new ones.
+        if (group.code !== existing.group_code || productType !== existing.product_type) {
+          db.prepare("DELETE FROM kpi_forecast_match WHERE forecast_id = ? AND status = 'dismissed'").run(id);
+        }
         if (restoring) db.prepare("DELETE FROM kpi_forecast_match WHERE forecast_id = ? AND status = 'confirmed'").run(id);
       }
     });

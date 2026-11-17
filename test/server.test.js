@@ -637,8 +637,9 @@ test('KPI achievement counts this year net, matches groups and keeps forecasts',
   assert.equal(next.forecast.expectedNet, next.actual.net + 1 - 1);
 
   const history = await (await request(progressUrl)).json();
-  assert.deepEqual(history.entries.map((entry) => entry.note), ['开通 3 条', '已签合同，等施工']);
-  assert.deepEqual(history.entries.map((entry) => entry.landed_count), [3, 0]);
+  // Changing the line count leaves its own line in the history.
+  assert.deepEqual(history.entries.map((entry) => entry.note), ['开通 3 条', '已签合同，等施工', '预计条数：2 → 4']);
+  assert.deepEqual(history.entries.map((entry) => entry.landed_count), [3, 0, 0]);
   assert.equal(history.entries[0].created_by, 'admin');
 
   assert.equal((await request(`/api/kpi/forecasts/${freshRow.id}`, { method: 'PATCH', body: { line_count: 2 } })).status, 400, 'fewer lines than have landed');
@@ -2196,6 +2197,49 @@ test('the group pages and the manager page show ARPU from the revenue report', a
   assert.deepEqual([january.arpuMonth, named(january, '收入经理').arpu], [null, null]);
 
   db.exec("DELETE FROM revenue_source_row; DELETE FROM revenue_batch_month; DELETE FROM revenue_batch; DELETE FROM leased_line WHERE group_product_code LIKE 'ARL%'");
+});
+
+test('a registered forecast can be changed: month, count, product type, confidence and group, each noted', async () => {
+  const insert = db.prepare(`INSERT INTO leased_line (group_code, group_name, group_product_code, product_name, product_status_name, manager_name, updated_at)
+    VALUES (?, ?, ?, '互联网专线', '正常在用', ?, ?)`);
+  insert.run('FE001', '原集团', 'FEL1', '原经理', nowIso());
+  insert.run('FE002', '新集团', 'FEL2', '新经理', nowIso());
+  const now = new Date(Date.now() + 8 * 3600 * 1000);
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth() + 1;
+  const made = await (await request('/api/kpi/forecasts', { method: 'POST', body: { group_code: 'FE001', product_type: '互联网专线', kind: 'added', year, month, line_count: 3, confidence: 'possible' } })).json();
+  const change = (body) => request(`/api/kpi/forecasts/${made.id}`, { method: 'PATCH', body });
+  const notes = async () => (await (await request(`/api/kpi/forecasts/${made.id}/progress`)).json()).entries.map((entry) => entry.note);
+
+  assert.equal((await change({ product_type: '不存在的产品' })).status, 400);
+  assert.equal((await change({ group_code: 'NOWHERE' })).status, 400);
+  assert.equal((await change({ line_count: 0 })).status, 400);
+  assert.equal((await change({ year: year - 1, month: 1 })).status, 400, 'only open months');
+
+  const saved = await change({ year: year + 1, month: 2, line_count: 5, product_type: '传输专线', confidence: 'certain', group_code: 'FE002' });
+  assert.equal(saved.status, 200);
+  const row = db.prepare('SELECT year, month, line_count, product_type, confidence, group_code, group_name, manager_name FROM kpi_forecast WHERE id = ?').get(made.id);
+  assert.deepEqual({ ...row }, { year: year + 1, month: 2, line_count: 5, product_type: '传输专线', confidence: 'certain', group_code: 'FE002', group_name: '新集团', manager_name: '新经理' });
+  const written = (await notes())[0];
+  for (const part of [`预计月份：${year}年${month}月 → ${year + 1}年2月`, '预计条数：3 → 5', '产品类型：互联网专线 → 传输专线', '把握度：在谈 → 已签约', '集团：原集团（FE001）→ 新集团（FE002）', '客户经理：原经理 → 新经理']) {
+    assert.equal(written.includes(part), true, part);
+  }
+  // Moved into next year, it is a reserve now, not this year's forecast.
+  const overview = await (await request('/api/kpi?kpiMode=0')).json();
+  assert.deepEqual([overview.forecasts.some((item) => item.id === made.id), overview.reserve.some((item) => item.id === made.id)], [false, true]);
+
+  // Nothing changed means nothing written.
+  const before = (await notes()).length;
+  assert.equal((await change({ line_count: 5, product_type: '传输专线' })).status, 200);
+  assert.equal((await notes()).length, before);
+  // The count cannot go below what has landed.
+  await request(`/api/kpi/forecasts/${made.id}/progress`, { method: 'POST', body: { note: '开通 2 条', landed_count: 2 } });
+  const tooFew = await change({ line_count: 1 });
+  assert.equal(tooFew.status, 400);
+  assert.match((await tooFew.json()).error, /已落地 2 条/);
+
+  db.prepare('DELETE FROM kpi_forecast WHERE id = ?').run(made.id);
+  db.exec("DELETE FROM leased_line WHERE group_product_code LIKE 'FEL%'");
 });
 
 test('logout invalidates the session cookie', async () => {
