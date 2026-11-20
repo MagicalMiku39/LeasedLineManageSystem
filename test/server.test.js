@@ -2308,8 +2308,8 @@ test('a forecast is archived, not deleted: done or dropped with a reason, out of
   assert.equal(after.forecast.cancelled, before.forecast.cancelled - 2);
   const notes = async (id) => (await (await request(`/api/kpi/forecasts/${id}/progress`)).json()).entries.map((entry) => entry.note);
   assert.equal((await notes(won))[0], '归档：已完结（已落地）；已落地 0 → 4；合同已签');
-  assert.equal((await notes(lost))[0], '归档：未完结（未落地）；原因：友商签约；对方报价更低');
-  assert.equal((await notes(goneAway))[0], '归档：未完结（未销户）；原因：挽留成功');
+  assert.equal((await notes(lost))[0], '归档：未完结（未落地）；原因：友商签约；实际落地 1 条（预计 4 条），其余 3 条不再计入；对方报价更低');
+  assert.equal((await notes(goneAway))[0], '归档：未完结（未销户）；原因：挽留成功；实际销户 0 条（预计 2 条），其余 2 条不再计入');
 
   // An archived forecast takes no edits or progress until it is reopened.
   assert.equal((await request(`/api/kpi/forecasts/${lost}`, { method: 'PATCH', body: { line_count: 6 } })).status, 409);
@@ -2326,6 +2326,24 @@ test('a forecast is archived, not deleted: done or dropped with a reason, out of
   assert.deepEqual({ ...reopened }, { landed_count: 0, archive_status: null, archived_at: null });
   assert.equal((await notes(won))[0], '取消归档（原为已完结（已落地））');
   assert.equal((await overview()).forecast.added, before.forecast.added - 3, 'counts again');
+
+  // Done with fewer lines than forecast: what landed counts, the rest stops counting.
+  const partial = await make({ line_count: 10 });
+  assert.equal((await archive(partial, { status: 'done', landed_count: 11 })).status, 400);
+  assert.equal((await archive(partial, { status: 'done', landed_count: 0 })).status, 400, 'done needs at least one');
+  assert.equal((await archive(partial, { status: 'done', landed_count: 'x' })).status, 400);
+  const addedBefore = (await overview()).forecast.added;
+  assert.equal((await archive(partial, { status: 'done', landed_count: 5, note: '客户只要 5 条' })).status, 200);
+  assert.deepEqual({ ...db.prepare('SELECT landed_count, archive_status, landed_before_archive FROM kpi_forecast WHERE id = ?').get(partial) }, { landed_count: 5, archive_status: 'done', landed_before_archive: 0 });
+  assert.equal((await notes(partial))[0], '归档：已完结（已落地）；已落地 0 → 5；实际落地 5 条（预计 10 条），其余 5 条不再计入；客户只要 5 条');
+  assert.equal((await overview()).forecast.added, addedBefore - 10, 'none of the ten counts as forecast any more');
+  // Dropped can set the count too, up or down from what was recorded.
+  const dropped = await make({ line_count: 6 });
+  assert.equal((await archive(dropped, { status: 'dropped', reason: '客户无需求', landed_count: 2 })).status, 200);
+  assert.equal(db.prepare('SELECT landed_count FROM kpi_forecast WHERE id = ?').get(dropped).landed_count, 2);
+  assert.equal((await request(`/api/kpi/forecasts/${dropped}/restore`, { method: 'POST' })).status, 200);
+  assert.equal(db.prepare('SELECT landed_count FROM kpi_forecast WHERE id = ?').get(dropped).landed_count, 0, 'reopening goes back to before');
+  db.prepare('DELETE FROM kpi_forecast WHERE id IN (?, ?)').run(partial, dropped);
 
   // The group profile says how each one ended.
   const profile = await (await request('/api/groups/AC001?kpiMode=0')).json();

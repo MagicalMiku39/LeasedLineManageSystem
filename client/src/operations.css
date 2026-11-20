@@ -363,3 +363,5 @@ button.group-link:hover { background: none; box-shadow: none; text-decoration: u
 .kpi-archive-done { background: #e8f4ec; color: #167d4a; }
 .kpi-archive-dropped { background: #eeeef1; color: #5b5b64; }
 .kpi-archived-table tbody tr { color: #4a4a50; }
+.kpi-archive-result { align-self: end; margin: 0 0 8px; color: var(--muted); font-size: 13px; }
+.kpi-archive-result.kpi-edit-warn { color: var(--red); }

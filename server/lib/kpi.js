@@ -433,10 +433,21 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     if (note.length > maxArchiveNote) return res.status(400).json({ error: `说明不能超过 ${maxArchiveNote} 字` });
     const words = archiveWords[existing.kind] || archiveWords.added;
     const doneWord = existing.kind === 'cancelled' ? '已销户' : '已落地';
-    const landedCount = status === 'done' ? existing.line_count : existing.landed_count;
+    // The final count can be given: done with fewer lines than forecast, or dropped after some
+    // landed. Without one, done lands everything and dropped keeps what had landed.
+    let landedCount = status === 'done' ? existing.line_count : existing.landed_count;
+    const given = req.body?.landed_count;
+    if (given !== undefined && given !== null && given !== '') {
+      landedCount = Number(given);
+      if (!Number.isSafeInteger(landedCount) || landedCount < 0 || landedCount > existing.line_count) {
+        return res.status(400).json({ error: `最终${doneWord}条数须为 0–${existing.line_count} 的整数` });
+      }
+    }
+    if (status === 'done' && landedCount === 0) return res.status(400).json({ error: `已完结至少要有 1 条${doneWord}；一条都没有请选未完结` });
     const parts = [`归档：${words[status]}`];
     if (status === 'dropped') parts.push(`原因：${reason}`);
     if (landedCount !== existing.landed_count) parts.push(`${doneWord} ${existing.landed_count} → ${landedCount}`);
+    if (landedCount < existing.line_count) parts.push(`实际${doneWord.slice(1)} ${landedCount} 条（预计 ${existing.line_count} 条），其余 ${existing.line_count - landedCount} 条不再计入`);
     if (note) parts.push(note);
     const username = currentUser(req)?.username || '';
     saveProgress(id, {
