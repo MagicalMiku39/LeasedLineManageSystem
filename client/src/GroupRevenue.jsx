@@ -2,6 +2,7 @@ import React, { useEffect, useImperativeHandle, useMemo, useRef, useState } from
 import { ArrowDown, ArrowUp, ArrowUpDown, Building2, ChevronLeft, ChevronRight, FileSpreadsheet, History, ListChecks, Plus, RefreshCw, Save, Search, Settings2, Trash2, Upload, UsersRound, X, Pencil, CircleAlert } from 'lucide-react';
 import './revenue.css';
 import { GroupedBars } from './charts.jsx';
+import { saveWorkbook } from './saveFile.js';
 
 const format = (value) => value == null ? '—' : Number(value).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const percent = (value) => value == null ? '—' : `${(value * 100).toFixed(2)}%`;
@@ -315,7 +316,7 @@ export default function GroupRevenue({ ref, onExportReady, kpiMode, defaultManag
         });
         sheet['!cols'] = fields.map(() => ({ wch: 22 }));
         XLSX.utils.book_append_sheet(book, sheet, '收入明细');
-        XLSX.writeFile(book, `集团收入-${month}-${group ? '产品' : view === 'groups' ? '集团' : view === 'history' ? '导入记录' : '客户经理'}.xlsx`);
+        await saveWorkbook(XLSX, book, `集团收入-${month}-${group ? '产品' : view === 'groups' ? '集团' : view === 'history' ? '导入记录' : '客户经理'}.xlsx`);
       } catch (failure) { setError(failure.message || '收入导出失败，请重试'); }
     }
   }));

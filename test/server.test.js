@@ -1231,6 +1231,10 @@ test('existing forecasts marked as landed count as fully landed after the upgrad
     { group_code: 'A', line_count: 3, landed_count: 3 },
     { group_code: 'B', line_count: 2, landed_count: 0 }
   ]);
+  assert.deepEqual(old.prepare('SELECT group_code, archive_status, landed_before_archive FROM kpi_forecast ORDER BY id').all().map((row) => ({ ...row })), [
+    { group_code: 'A', archive_status: 'done', landed_before_archive: 3 },
+    { group_code: 'B', archive_status: null, landed_before_archive: null }
+  ], 'a forecast that had fully landed is archived as done');
   old.close();
 });
 
@@ -2018,6 +2022,11 @@ test('every response carries the security headers and no other site may call the
     assert.equal(response.headers.get('access-control-allow-origin'), null, path);
   }
   assert.equal((await request('/api/ledger?page=1')).headers.get('referrer-policy'), 'same-origin');
+  // The page may read back only its own temporary files (the Android app saves exports that way),
+  // and still runs no script but its own.
+  const policy = (await request('/api/health')).headers.get('content-security-policy');
+  assert.match(policy, /connect-src 'self' blob:;/);
+  assert.match(policy, /script-src 'self';/);
   assert.equal((await request('/api/fill/none')).headers.get('referrer-policy'), 'no-referrer');
   // A browser's cross-site preflight gets no permission to go on.
   const preflight = await request('/api/ledger', { method: 'OPTIONS', headers: { Origin: 'https://evil.example', 'Access-Control-Request-Method': 'PATCH' } });
@@ -2259,6 +2268,73 @@ test('the KPI form offers every manager, not only those with lines this year', a
   assert.equal(new Set(names).size, names.length, 'each name once');
 
   db.exec("DELETE FROM leased_line WHERE group_product_code LIKE 'MNL%'; DELETE FROM group_directory WHERE group_code = 'MN900'");
+});
+
+test('a forecast is archived, not deleted: done or dropped with a reason, out of every count, and can be reopened', async () => {
+  db.prepare(`INSERT INTO leased_line (group_code, group_name, group_product_code, product_name, product_status_name, manager_name, updated_at)
+    VALUES ('AC001', '归档集团', 'ACL1', '互联网专线', '正常在用', '归档经理', ?)`).run(nowIso());
+  const now = new Date(Date.now() + 8 * 3600 * 1000);
+  const body = { group_code: 'AC001', product_type: '互联网专线', year: now.getUTCFullYear(), month: now.getUTCMonth() + 1, confidence: 'likely' };
+  const make = async (extra) => (await (await request('/api/kpi/forecasts', { method: 'POST', body: { ...body, kind: 'added', line_count: 4, ...extra } })).json()).id;
+  const won = await make();
+  const lost = await make();
+  const goneAway = await make({ kind: 'cancelled', line_count: 2 });
+  await request(`/api/kpi/forecasts/${lost}/progress`, { method: 'POST', body: { note: '先开通 1 条', landed_count: 1 } });
+  const overview = async () => (await request('/api/kpi?kpiMode=0')).json();
+  const before = await overview();
+  const archive = (id, payload) => request(`/api/kpi/forecasts/${id}/archive`, { method: 'POST', body: payload });
+
+  assert.equal((await archive(won, { status: 'maybe' })).status, 400);
+  assert.equal((await archive(lost, { status: 'dropped' })).status, 400, 'dropped needs a reason');
+  assert.equal((await archive(lost, { status: 'dropped', reason: '挽留成功' })).status, 400, 'a reason for the other kind');
+  assert.equal((await archive(lost, { status: 'dropped', reason: '其他' })).status, 400, '其他 needs words');
+  assert.equal((await archive(lost, { status: 'dropped', reason: '友商签约', note: 'x'.repeat(201) })).status, 400);
+
+  // Done: what was left lands. Dropped: what landed stays, the rest stops counting.
+  assert.equal((await archive(won, { status: 'done', note: '合同已签' })).status, 200);
+  assert.equal((await archive(lost, { status: 'dropped', reason: '友商签约', note: '对方报价更低' })).status, 200);
+  assert.equal((await archive(goneAway, { status: 'dropped', reason: '挽留成功' })).status, 200);
+  assert.equal((await archive(won, { status: 'done' })).status, 409, 'once only');
+  const rows = Object.fromEntries(db.prepare('SELECT id, landed_count, archive_status, archive_reason, archive_note FROM kpi_forecast WHERE id IN (?, ?, ?)').all(won, lost, goneAway).map((row) => [row.id, { ...row }]));
+  assert.deepEqual(rows[won], { id: won, landed_count: 4, archive_status: 'done', archive_reason: null, archive_note: '合同已签' });
+  assert.deepEqual(rows[lost], { id: lost, landed_count: 1, archive_status: 'dropped', archive_reason: '友商签约', archive_note: '对方报价更低' });
+
+  const after = await overview();
+  const ids = (list) => list.map((row) => row.id);
+  for (const id of [won, lost, goneAway]) assert.equal(ids(after.forecasts).includes(id), false, 'out of the open list');
+  assert.deepEqual(ids(after.archived).filter((id) => [won, lost, goneAway].includes(id)).sort(), [won, lost, goneAway].sort());
+  // Out of every forecast figure: 4 + 3 left to add and 2 to cancel, all gone.
+  assert.equal(after.forecast.added, before.forecast.added - 7);
+  assert.equal(after.forecast.cancelled, before.forecast.cancelled - 2);
+  const notes = async (id) => (await (await request(`/api/kpi/forecasts/${id}/progress`)).json()).entries.map((entry) => entry.note);
+  assert.equal((await notes(won))[0], '归档：已完结（已落地）；已落地 0 → 4；合同已签');
+  assert.equal((await notes(lost))[0], '归档：未完结（未落地）；原因：友商签约；对方报价更低');
+  assert.equal((await notes(goneAway))[0], '归档：未完结（未销户）；原因：挽留成功');
+
+  // An archived forecast takes no edits or progress until it is reopened.
+  assert.equal((await request(`/api/kpi/forecasts/${lost}`, { method: 'PATCH', body: { line_count: 6 } })).status, 409);
+  assert.equal((await request(`/api/kpi/forecasts/${lost}/progress`, { method: 'POST', body: { note: '还在谈' } })).status, 409);
+  // Nor does it reach a fill link.
+  const link = (await (await request('/api/share-links', { method: 'POST', body: { manager: '归档经理', scopes: ['progress'], days: 1 } })).json()).path.slice(6);
+  assert.deepEqual((await (await request(`/api/fill/${link}`, {}, false)).json()).forecasts, []);
+  assert.equal((await request(`/api/fill/${link}/forecasts/${lost}/progress`, { method: 'POST', body: { note: 'x' } }, false)).status, 404);
+
+  // Reopening brings back what had landed before it was closed.
+  assert.equal((await request(`/api/kpi/forecasts/${won}/restore`, { method: 'POST' })).status, 200);
+  assert.equal((await request(`/api/kpi/forecasts/${won}/restore`, { method: 'POST' })).status, 409);
+  const reopened = db.prepare('SELECT landed_count, archive_status, archived_at FROM kpi_forecast WHERE id = ?').get(won);
+  assert.deepEqual({ ...reopened }, { landed_count: 0, archive_status: null, archived_at: null });
+  assert.equal((await notes(won))[0], '取消归档（原为已完结（已落地））');
+  assert.equal((await overview()).forecast.added, before.forecast.added - 3, 'counts again');
+
+  // The group profile says how each one ended.
+  const profile = await (await request('/api/groups/AC001?kpiMode=0')).json();
+  const status = Object.fromEntries(profile.forecasts.map((row) => [row.id, [row.archive_status, row.archive_reason]]));
+  assert.deepEqual([status[won], status[lost]], [[null, null], ['dropped', '友商签约']]);
+
+  db.exec("DELETE FROM share_link_source; DELETE FROM share_link");
+  db.prepare('DELETE FROM kpi_forecast WHERE id IN (?, ?, ?)').run(won, lost, goneAway);
+  db.exec("DELETE FROM leased_line WHERE group_product_code = 'ACL1'");
 });
 
 test('logout invalidates the session cookie', async () => {

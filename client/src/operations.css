@@ -345,3 +345,21 @@ button.group-link:hover { background: none; box-shadow: none; text-decoration: u
 @media (max-width: 520px) {
   .kpi-edit-fields { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ---------- 归档 ---------- */
+.kpi-archive-facts { margin: 0 0 12px; font-size: 13px; }
+.kpi-archive-choices { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.kpi-archive-choices legend { margin-bottom: 6px; padding: 0; font-size: 13px; }
+.kpi-archive-choices label { display: flex; align-items: flex-start; gap: 10px; margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; }
+.kpi-archive-choices label.kpi-archive-chosen { border-color: var(--accent); background: var(--accent-soft); }
+.kpi-archive-choices input { width: 16px; height: 16px; margin: 2px 0 0; flex: none; }
+.kpi-archive-choices span { display: grid; gap: 3px; min-width: 0; font-size: 13px; }
+.kpi-archive-choices small { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.kpi-archive-reason { margin-top: 12px; }
+.kpi-archive-reason textarea { width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid var(--control); border-radius: var(--radius-sm); font: inherit; font-size: 13px; resize: vertical; }
+.kpi-row-actions .kpi-archive-ready { border-color: rgba(17, 132, 66, .45); color: var(--green); }
+.kpi-archived-toggle { display: inline-flex; align-items: center; gap: 6px; height: auto; margin: 20px 0 8px; padding: 0; border: 0; background: none; box-shadow: none; color: var(--ink); font-size: 14px; font-weight: 600; }
+.kpi-archived-toggle span { color: var(--muted); font-size: 12px; font-weight: 400; }
+.kpi-archive-done { background: #e8f4ec; color: #167d4a; }
+.kpi-archive-dropped { background: #eeeef1; color: #5b5b64; }
+.kpi-archived-table tbody tr { color: #4a4a50; }

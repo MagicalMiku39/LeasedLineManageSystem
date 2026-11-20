@@ -15,6 +15,19 @@ const confidenceWords = {
 const confidenceNames = (kind) => confidenceWords[kind] || confidenceWords.added;
 const monthName = (year, month) => `${year}年${month}月`;
 
+// Closing a forecast: it either came true (done) or will not (dropped). It is kept, out of the
+// open list and out of every count, and can be reopened.
+export const archiveStatuses = ['done', 'dropped'];
+export const archiveWords = {
+  added: { done: '已完结（已落地）', dropped: '未完结（未落地）' },
+  cancelled: { done: '已完结（已销户）', dropped: '未完结（未销户）' }
+};
+export const archiveReasons = {
+  added: ['客户无需求', '友商签约', '价格未谈拢', '资源或覆盖不具备', '项目暂停或延期', '登记有误或重复', '其他'],
+  cancelled: ['挽留成功', '客户续约', '登记有误或重复', '其他']
+};
+const maxArchiveNote = 200;
+
 // Today in Beijing: the month decides which forecast months are open and which are overdue.
 function beijingToday(date = new Date()) {
   const [year, month, day] = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' })
@@ -76,6 +89,17 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
   if (!forecastColumns.includes('confidence')) {
     db.exec("ALTER TABLE kpi_forecast ADD COLUMN confidence TEXT NOT NULL DEFAULT 'unrated'");
   }
+  // From before archiving: a forecast that had fully landed was done, and is archived as such.
+  if (!forecastColumns.includes('archive_status')) {
+    db.exec(`ALTER TABLE kpi_forecast ADD COLUMN archive_status TEXT;
+      ALTER TABLE kpi_forecast ADD COLUMN archive_reason TEXT;
+      ALTER TABLE kpi_forecast ADD COLUMN archive_note TEXT;
+      ALTER TABLE kpi_forecast ADD COLUMN archived_at TEXT;
+      ALTER TABLE kpi_forecast ADD COLUMN archived_by TEXT;
+      ALTER TABLE kpi_forecast ADD COLUMN landed_before_archive INTEGER;
+      UPDATE kpi_forecast SET archive_status = 'done', archived_at = updated_at, archived_by = '', landed_before_archive = landed_count
+        WHERE landed_count >= line_count;`);
+  }
   db.exec(`CREATE TABLE IF NOT EXISTS kpi_forecast_progress (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     forecast_id INTEGER NOT NULL REFERENCES kpi_forecast(id) ON DELETE CASCADE,
@@ -126,6 +150,7 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
 
   const forecastSelect = `SELECT f.id, f.year, f.month, f.kind, f.group_code, f.group_name, f.manager_name, f.product_type,
       f.line_count, f.landed_count, f.confidence, f.created_at, f.updated_at,
+      f.archive_status, f.archive_reason, f.archive_note, f.archived_at, f.archived_by,
       (SELECT note FROM kpi_forecast_progress p WHERE p.forecast_id = f.id ORDER BY p.id DESC LIMIT 1) AS latest_note,
       (SELECT created_at FROM kpi_forecast_progress p WHERE p.forecast_id = f.id ORDER BY p.id DESC LIMIT 1) AS latest_at
     FROM kpi_forecast f`;
@@ -133,10 +158,12 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
   // Only the part not yet in the ledger still counts as a forecast. One whose month has passed
   // with part of it still to land is overdue; it keeps counting until it lands or is moved.
   function withRemaining(row) {
+    // An archived forecast counts for nothing any more, whatever is left of it.
+    if (row.archive_status) return { ...row, remaining: 0, landed: row.archive_status === 'done', overdue: false, archived: true };
     const remaining = Math.max(row.line_count - row.landed_count, 0);
     const now = today();
     const overdue = remaining > 0 && (row.year < now.year || (row.year === now.year && row.month < now.month));
-    return { ...row, remaining, landed: remaining === 0, overdue };
+    return { ...row, remaining, landed: remaining === 0, overdue, archived: false };
   }
 
   function isOpenMonth(year, month) {
@@ -144,7 +171,11 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
   }
 
   function forecastRows(year) {
-    return db.prepare(`${forecastSelect} WHERE f.year = ? ORDER BY f.month ASC, f.kind ASC, f.id ASC`).all(year).map(withRemaining);
+    return db.prepare(`${forecastSelect} WHERE f.year = ? AND f.archive_status IS NULL ORDER BY f.month ASC, f.kind ASC, f.id ASC`).all(year).map(withRemaining);
+  }
+
+  function archivedRows() {
+    return db.prepare(`${forecastSelect} WHERE f.archive_status IS NOT NULL ORDER BY f.archived_at DESC, f.id DESC LIMIT 500`).all().map(withRemaining);
   }
 
   function forecastRow(id) {
@@ -264,6 +295,9 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
       months: openForecastMonths(now),
       confidenceLevels,
       productTypes,
+      archived: archivedRows(),
+      archiveReasons,
+      archiveWords,
       // Everyone a forecast for a new group can be put under: every manager the ledger or the full
       // group list names, whatever the KPI scope and whether or not they have lines this year.
       managerNames: db.prepare(
@@ -382,11 +416,68 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     res.status(result.status).json(result.json);
   });
 
+  /** Closes a forecast: done lands whatever was left; dropped keeps what landed and needs a reason. */
+  router.post('/forecasts/:id/archive', (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: '预计记录不正确' });
+    const existing = db.prepare('SELECT * FROM kpi_forecast WHERE id = ?').get(id);
+    if (!existing) return res.status(404).json({ error: '预计记录不存在' });
+    if (existing.archive_status) return res.status(409).json({ error: '这条预计已经归档' });
+    const status = String(req.body?.status ?? '');
+    const reason = String(req.body?.reason ?? '').trim();
+    const note = String(req.body?.note ?? '').trim();
+    const reasons = archiveReasons[existing.kind] || archiveReasons.added;
+    if (!archiveStatuses.includes(status)) return res.status(400).json({ error: '请选择已完结或未完结' });
+    if (status === 'dropped' && !reasons.includes(reason)) return res.status(400).json({ error: '请选择未完结的原因' });
+    if (status === 'dropped' && reason === '其他' && !note) return res.status(400).json({ error: '原因选“其他”时请填写说明' });
+    if (note.length > maxArchiveNote) return res.status(400).json({ error: `说明不能超过 ${maxArchiveNote} 字` });
+    const words = archiveWords[existing.kind] || archiveWords.added;
+    const doneWord = existing.kind === 'cancelled' ? '已销户' : '已落地';
+    const landedCount = status === 'done' ? existing.line_count : existing.landed_count;
+    const parts = [`归档：${words[status]}`];
+    if (status === 'dropped') parts.push(`原因：${reason}`);
+    if (landedCount !== existing.landed_count) parts.push(`${doneWord} ${existing.landed_count} → ${landedCount}`);
+    if (note) parts.push(note);
+    const username = currentUser(req)?.username || '';
+    saveProgress(id, {
+      note: parts.join('；'),
+      landedCount,
+      lineCount: existing.line_count,
+      username,
+      alsoInTransaction: (at) => db.prepare(
+        `UPDATE kpi_forecast SET archive_status = ?, archive_reason = ?, archive_note = ?, archived_at = ?, archived_by = ?, landed_before_archive = ? WHERE id = ?`
+      ).run(status, status === 'dropped' ? reason : null, note || null, at, username, existing.landed_count, id)
+    });
+    res.json(forecastRow(id));
+  });
+
+  /** Reopens an archived forecast, with what had landed before it was closed. */
+  router.post('/forecasts/:id/restore', (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: '预计记录不正确' });
+    const existing = db.prepare('SELECT * FROM kpi_forecast WHERE id = ?').get(id);
+    if (!existing) return res.status(404).json({ error: '预计记录不存在' });
+    if (!existing.archive_status) return res.status(409).json({ error: '这条预计没有归档' });
+    const words = archiveWords[existing.kind] || archiveWords.added;
+    const landedCount = Math.min(existing.landed_before_archive ?? existing.landed_count, existing.line_count);
+    saveProgress(id, {
+      note: `取消归档（原为${words[existing.archive_status]}${existing.archive_reason ? `，${existing.archive_reason}` : ''}）`,
+      landedCount,
+      lineCount: existing.line_count,
+      username: currentUser(req)?.username || '',
+      alsoInTransaction: () => db.prepare(
+        'UPDATE kpi_forecast SET archive_status = NULL, archive_reason = NULL, archive_note = NULL, archived_at = NULL, archived_by = NULL, landed_before_archive = NULL WHERE id = ?'
+      ).run(id)
+    });
+    res.json(forecastRow(id));
+  });
+
   router.patch('/forecasts/:id', (req, res) => {
     const id = Number(req.params.id);
     if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: '预计记录不正确' });
     const existing = db.prepare('SELECT * FROM kpi_forecast WHERE id = ?').get(id);
     if (!existing) return res.status(404).json({ error: '预计记录不存在' });
+    if (existing.archive_status) return res.status(409).json({ error: '这条预计已经归档，请先取消归档再修改' });
     const body = req.body || {};
     let lineCount = existing.line_count;
     let landedCount = existing.landed_count;
@@ -513,6 +604,7 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     if (!Number.isSafeInteger(id) || id <= 0) return fail('预计记录不正确');
     const existing = db.prepare('SELECT * FROM kpi_forecast WHERE id = ?').get(id);
     if (!existing) return fail('预计记录不存在', 404);
+    if (existing.archive_status) return fail('这条预计已经归档，请先取消归档再更新进展', 409);
     const note = String(body.note ?? '').trim();
     if (!note) return fail('请填写进展说明');
     if (note.length > maxProgressNote) return fail(`进展说明不能超过 ${maxProgressNote} 字`);
@@ -528,7 +620,7 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
     return { status: 201, json: forecastRow(id) };
   }
   router.addProgress = addProgress;
-  router.forecastsOf = (manager) => db.prepare(`${forecastSelect} WHERE f.manager_name = ? ORDER BY f.year, f.month, f.id`).all(manager).map(withRemaining);
+  router.forecastsOf = (manager) => db.prepare(`${forecastSelect} WHERE f.manager_name = ? AND f.archive_status IS NULL ORDER BY f.year, f.month, f.id`).all(manager).map(withRemaining);
   router.openMonths = () => openForecastMonths(today());
 
   router.post('/forecasts/:id/progress', (req, res) => {

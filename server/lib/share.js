@@ -367,8 +367,8 @@ export function createShareService({ db, currentUser, updateLine, kpi, productTy
     const link = linkFor(req, res, 'progress');
     if (!link) return;
     const id = Number(req.params.id);
-    const forecast = Number.isSafeInteger(id) ? db.prepare('SELECT id, manager_name, group_name, landed_count FROM kpi_forecast WHERE id = ?').get(id) : null;
-    if (!forecast || forecast.manager_name !== link.manager_name) return res.status(404).json({ error: '这条商机不在这个链接的范围内' });
+    const forecast = Number.isSafeInteger(id) ? db.prepare('SELECT id, manager_name, group_name, landed_count, archive_status FROM kpi_forecast WHERE id = ?').get(id) : null;
+    if (!forecast || forecast.manager_name !== link.manager_name || forecast.archive_status) return res.status(404).json({ error: '这条商机不在这个链接的范围内' });
     const result = kpi().addProgress(id, { note: req.body?.note, landed_count: req.body?.landed_count }, actor(link));
     if (result.status === 201) {
       const landed = result.json.landed_count !== forecast.landed_count ? `；已落地 ${forecast.landed_count} → ${result.json.landed_count}` : '';

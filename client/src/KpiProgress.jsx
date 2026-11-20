@@ -87,7 +87,9 @@ export default function KpiProgress({ forecastId, onClose, onChanged }) {
                 <dt>预计</dt>
                 <dd>{forecast.month}月{forecast.kind === 'cancelled' ? '销户' : '新增'} {forecast.line_count} 条</dd>
                 <dt>进度</dt>
-                <dd>{forecastState(forecast)}：{countWord} {forecast.landed_count} 条，还有 {forecast.remaining} 条计入预计</dd>
+                <dd>{forecast.archived
+                  ? `已归档 · ${forecast.archive_status === 'done' ? '已完结' : '未完结'}${forecast.archive_reason ? `（${forecast.archive_reason}）` : ''}：${countWord} ${forecast.landed_count} 条，不再计入预计`
+                  : `${forecastState(forecast)}：${countWord} ${forecast.landed_count} 条，还有 ${forecast.remaining} 条计入预计`}</dd>
               </dl>
 
               {suggestions.length > 0 && (
@@ -118,7 +120,8 @@ export default function KpiProgress({ forecastId, onClose, onChanged }) {
                 </section>
               )}
 
-              <form className="kpi-progress-form" onSubmit={submit}>
+              {forecast.archived && <p className="subtle kpi-edit-note">已归档，不能再添加进展；需要继续跟进，请先在“已归档”中取消归档。</p>}
+              {!forecast.archived && <form className="kpi-progress-form" onSubmit={submit}>
                 <label>
                   进展说明
                   <textarea
@@ -148,7 +151,7 @@ export default function KpiProgress({ forecastId, onClose, onChanged }) {
                   <span className="subtle">更新时间由系统自动记录</span>
                   <button type="submit" className="primary" disabled={saving}>{saving ? '保存中…' : '更新进展'}</button>
                 </div>
-              </form>
+              </form>}
 
               <h4>历史进展（{entries.length}）</h4>
               {entries.length === 0 ? (

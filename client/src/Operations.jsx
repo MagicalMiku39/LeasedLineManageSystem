@@ -8,6 +8,7 @@ import StrategicCustomers from './StrategicCustomers.jsx';
 import Workbench from './Workbench.jsx';
 import { WarningDigestDialog, WarningMailDialog, WarningMailSettings } from './WarningMail.jsx';
 import { beijingDate, money } from './utils.js';
+import { saveWorkbook } from './saveFile.js';
 import './operations.css';
 
 const labels = { unmarked: '未标注', remind: '提醒', ignore: '忽略' };
@@ -85,7 +86,7 @@ function ArrearsWarnings({ ref, kpiMode, refreshToken, onOpenLine, onOpenGroup }
         })));
         const book = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(book, sheet, '欠费销户预警');
-        XLSX.writeFile(book, `欠费销户预警-${asOf}.xlsx`);
+        await saveWorkbook(XLSX, book, `欠费销户预警-${asOf}.xlsx`);
       } catch (err) { setError(`导出失败：${err.message}`); }
     }
   }), [rows, loading, asOf]);

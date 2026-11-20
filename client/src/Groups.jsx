@@ -265,6 +265,7 @@ function Profile({ data, code, revision, onOpenLine }) {
             { key: 'product_type', label: '产品类型' },
             { key: 'line_count', label: '条数', numeric: true },
             { key: 'landed_count', label: '已落地', numeric: true },
+            { key: 'archive_status', label: '状态', sortable: false, render: (row) => (row.archive_status ? `已归档 · ${row.archive_status === 'done' ? '已完结' : '未完结'}${row.archive_reason ? `（${row.archive_reason}）` : ''}` : '进行中') },
             { key: 'latest_note', label: '最新进展', sortable: false, render: (row) => (row.latest_note ? <span className="group-wrap" title={row.latest_note}>{row.latest_note}<small>{beijingTime(row.latest_at)}</small></span> : '—') }
           ]} />
         ) : <p className="group-empty">没有登记这个集团的预计任务</p>}

@@ -3,6 +3,7 @@ import { Ban, Copy, Link2, Mail } from 'lucide-react';
 import { isAbort, jsonBody, requestJson } from './api.js';
 import { defaultManagers } from './ledger/config.js';
 import { beijingTime } from './utils.js';
+import { saveWorkbook } from './saveFile.js';
 
 const dayChoices = [1, 3, 7, 14, 30];
 const stateLabels = { active: '有效', expired: '已过期', revoked: '已作废' };
@@ -52,7 +53,7 @@ export default function ShareLinks({ ref, refreshToken }) {
       XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(submissions.map((row) => ({
         时间: beijingTime(row.at), 客户经理: row.manager_name, 类别: kindLabels[row.kind] || row.kind, 内容: row.summary, 来源: (row.source || '').replace(/^ip:/, '')
       }))), '填报记录');
-      XLSX.writeFile(book, '填报记录.xlsx');
+      await saveWorkbook(XLSX, book, '填报记录.xlsx');
     }
   }), [submissions]);
 

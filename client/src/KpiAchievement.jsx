@@ -1,11 +1,13 @@
 import React, { useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { Check, ListChecks, Pencil, Plus, Search, Trash2, Undo2, UsersRound } from 'lucide-react';
+import { Archive, ChevronDown, ChevronUp, ListChecks, Pencil, Plus, Search, Undo2, UsersRound } from 'lucide-react';
 import { isAbort, jsonBody, requestJson } from './api.js';
 import { InlineError } from './components/Feedback.jsx';
+import KpiArchive from './KpiArchive.jsx';
 import KpiForecastEdit from './KpiForecastEdit.jsx';
 import KpiProgress from './KpiProgress.jsx';
 import { confidenceName, confidenceOrder, forecastState, gapSteps, kpiManagerRows } from './kpiRows.js';
 import { dataFreshness } from './ledgerChanges.js';
+import { saveWorkbook } from './saveFile.js';
 import { defaultManagers } from './ledger/config.js';
 import { KpiTrendChart, PaceCompare, PolarityBar, SegmentBar, SegmentLegend } from './charts.jsx';
 import { beijingMonth, beijingTime, netClass, signedNumber } from './utils.js';
@@ -15,8 +17,8 @@ const kindLabels = { added: '新增', cancelled: '销户' };
 // A month choice is kept as "year-month"; next year's months are its reserve.
 const monthKey = (item) => `${item.year}-${item.month}`;
 const monthLabel = (item, year) => (item.year === year ? `${item.month}月` : `${item.year}年${item.month}月（明年储备）`);
-// What "done" means for each kind of forecast once the real change is in the ledger.
-const landedLabels = { added: '已落地', cancelled: '已销户' };
+// How an archived forecast ended, in a few words.
+const archiveShort = { done: '已完结', dropped: '未完结' };
 
 function percent(value, target) {
   if (!target) return '—';
@@ -77,7 +79,9 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
   const [busyId, setBusyId] = useState(null);
-  const [confirmDelete, setConfirmDelete] = useState(null);
+  // The forecast being archived, and whether the archived list is open.
+  const [archiving, setArchiving] = useState(null);
+  const [showArchived, setShowArchived] = useState(false);
   const [targetDraft, setTargetDraft] = useState(null);
   const [targetError, setTargetError] = useState('');
   const [targetSaving, setTargetSaving] = useState(false);
@@ -145,14 +149,16 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
           客户经理: row.manager_name, 新增: row.added, 销户: row.cancelled, 净增: row.net,
           预计新增: row.forecastAdded, 预计销户: row.forecastCancelled, 预计净增: row.expectedNet
         }))), '客户经理净增');
-        XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet([...forecasts, ...(data.reserve || [])].map((row) => ({
+        XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet([...forecasts, ...(data.reserve || []), ...(data.archived || [])].map((row) => ({
           预计类别: kindLabels[row.kind], 月份: `${row.year}年${row.month}月`, 把握度: confidenceName(row.kind, row.confidence),
           集团编码: row.group_code, 集团名称: row.group_name, 客户经理: row.manager_name,
           产品类型: row.product_type, 条数: row.line_count, 已落地条数: row.landed_count,
-          状态: row.year > data.year ? '明年储备' : row.overdue ? `逾期 · ${forecastState(row)}` : forecastState(row),
+          状态: row.archived
+            ? `已归档 · ${data.archiveWords?.[row.kind]?.[row.archive_status] || archiveShort[row.archive_status]}${row.archive_reason ? ` · ${row.archive_reason}` : ''}${row.archive_note ? ` · ${row.archive_note}` : ''}`
+            : row.year > data.year ? '明年储备' : row.overdue ? `逾期 · ${forecastState(row)}` : forecastState(row),
           最新进展: row.latest_note || '', 进展更新时间: row.latest_at ? beijingTime(row.latest_at) : ''
         })), { header: ['预计类别', '月份', '把握度', '集团编码', '集团名称', '客户经理', '产品类型', '条数', '已落地条数', '状态', '最新进展', '进展更新时间'] }), '预计新增与销户');
-        XLSX.writeFile(book, `KPI达成-${data.year}.xlsx`);
+        await saveWorkbook(XLSX, book, `KPI达成-${data.year}.xlsx`);
       } catch (err) { setError(`导出失败：${err.message}`); }
     }
   }), [loading, data, managerRows, forecasts]);
@@ -195,12 +201,11 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
   // The forecast whose edit form is open.
   const [editing, setEditing] = useState(null);
 
-  async function changeForecast(row, request) {
+  async function changeForecast(row, request, action = '') {
     setBusyId(row.id);
     setError('');
     try {
-      await requestJson(`/kpi/forecasts/${row.id}`, request);
-      setConfirmDelete(null);
+      await requestJson(`/kpi/forecasts/${row.id}${action ? `/${action}` : ''}`, request);
       reload();
     } catch (err) {
       setError(`预计记录保存失败：${err.message}`);
@@ -255,6 +260,10 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
   };
   const shownForecasts = filtering ? forecasts.filter(shows) : forecasts;
   const shownReserve = filtering ? reserve.filter(shows) : reserve;
+  const archived = data?.archived || [];
+  // The state filter is about open forecasts; search and manager narrow the archive too.
+  const shownArchived = filtering ? archived.filter((row) => (!listManager || row.manager_name === listManager)
+    && listSearch.trim().toLowerCase().split(/\s+/).filter(Boolean).every((word) => `${row.group_name} ${row.group_code} ${row.manager_name} ${row.product_type} ${row.archive_reason || ''} ${row.archive_note || ''}`.toLowerCase().includes(word))) : archived;
   // A manager who no longer has any forecast cannot stay selected.
   useEffect(() => {
     if (listManager && !listManagers.includes(listManager)) setListManager('');
@@ -365,23 +374,13 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
           </button>
           <button
             type="button"
+            className={row.landed ? 'kpi-archive-ready' : undefined}
             disabled={busyId !== null}
-            title={row.landed
-              ? '恢复为预计，重新计入预计达成'
-              : row.kind === 'cancelled' ? '专线已实际销户，不再计入预计销户' : '专线已实际开通，不再计入预计新增'}
-            onClick={() => changeForecast(row, jsonBody('PATCH', { landed: !row.landed }))}
+            title={row.landed ? '已全部落地，可以归档为已完结' : '结束这条预计：已完结或未完结，不会删除'}
+            onClick={() => setArchiving(row)}
           >
-            {row.landed ? <><Undo2 size={14} /> 恢复预计</> : <><Check size={14} /> {landedLabels[row.kind]}</>}
+            <Archive size={14} /> 归档
           </button>
-          {confirmDelete === row.id ? (
-            <button type="button" className="kpi-danger" disabled={busyId !== null} onClick={() => changeForecast(row, { method: 'DELETE' })}>
-              确认删除
-            </button>
-          ) : (
-            <button type="button" disabled={busyId !== null} aria-label="删除" title="删除" onClick={() => setConfirmDelete(row.id)}>
-              <Trash2 size={14} />
-            </button>
-          )}
         </div>
       </td>
     </tr>
@@ -729,9 +728,55 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
             </div>
           </>
         )}
+        {!loading && archived.length > 0 && (
+          <>
+            <button type="button" className="kpi-archived-toggle" aria-expanded={showArchived} onClick={() => setShowArchived((value) => !value)}>
+              {showArchived ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+              已归档 <span>{filtering ? `${shownArchived.length} / ` : ''}{archived.length} 条 · 已完结 {archived.filter((row) => row.archive_status === 'done').length}，未完结 {archived.filter((row) => row.archive_status === 'dropped').length} · 不计入预计</span>
+            </button>
+            {showArchived && (
+              <div className="table-scroll kpi-table-scroll">
+                <table className="data-table kpi-table kpi-archived-table">
+                  <thead><tr><th>类别</th><th>月份</th><th>集团</th><th>客户经理</th><th>产品类型</th><th className="num">条数</th><th className="num">已落地</th><th>结果</th><th>原因与说明</th><th>归档时间</th><th className="kpi-actions-cell">操作</th></tr></thead>
+                  <tbody>
+                    {shownArchived.map((row) => (
+                      <tr key={row.id} className="kpi-forecast-row" tabIndex={0} title="查看进展" onClick={() => setProgressId(row.id)}>
+                        <td>{kindLabels[row.kind]}</td>
+                        <td>{row.year === data.year ? `${row.month}月` : `${row.year}年${row.month}月`}</td>
+                        <td className="kpi-wrap kpi-group-cell"><strong>{row.group_name}</strong><small>{row.group_code}</small></td>
+                        <td>{row.manager_name}</td>
+                        <td className="kpi-wrap kpi-type-cell">{row.product_type}</td>
+                        <td className="num">{row.line_count}</td>
+                        <td className="num">{row.landed_count}</td>
+                        <td><span className={`status-pill kpi-archive-${row.archive_status}`}>{archiveShort[row.archive_status]}</span></td>
+                        <td className="kpi-wrap kpi-note-cell">{row.archive_reason || (row.archive_note ? '' : '—')}{row.archive_reason && row.archive_note ? '：' : ''}{row.archive_note || ''}</td>
+                        <td>{beijingTime(row.archived_at)}</td>
+                        <td className="kpi-actions-cell" onClick={(event) => event.stopPropagation()}>
+                          <div className="kpi-row-actions">
+                            <button type="button" disabled={busyId !== null} title="重新放回预计列表" onClick={() => changeForecast(row, { method: 'POST' }, 'restore')}><Undo2 size={14} /> 取消归档</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {shownArchived.length === 0 && <tr className="state-row"><td colSpan="11" className="empty">没有符合筛选条件的归档</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
         {suggestionTotal > 0 && <p className="kpi-suggestion-note" role="status">导入后发现可能对应预计任务的专线，点击带标记的任务确认。确认前不会改动任何数字。</p>}
-        <p className="operations-rule">预计年度净增 = 当前净增 + 预计新增 − 预计销户，只计尚未落地的条数。点击一行可以查看和更新进展；专线实际开通或销户、已体现在台账中后，请填写已落地条数，或点“已落地”“已销户”表示全部完成，避免重复计算。</p>
+        <p className="operations-rule">预计年度净增 = 当前净增 + 预计新增 − 预计销户，只计尚未落地的条数。点击一行可以查看和更新进展；专线实际开通或销户、已体现在台账中后，请在进展里填写已落地条数。一条预计结束时点“归档”：已完结表示全部落地，未完结表示不会再落地并记下原因。归档后不再计入预计，可随时取消归档。</p>
       </section>
+      {archiving && (
+        <KpiArchive
+          row={archiving}
+          reasons={data?.archiveReasons?.[archiving.kind] || []}
+          words={data?.archiveWords?.[archiving.kind] || { done: '已完结', dropped: '未完结' }}
+          onClose={() => setArchiving(null)}
+          onSaved={() => { setArchiving(null); reload(); }}
+        />
+      )}
       {editing && (
         <KpiForecastEdit
           row={editing}

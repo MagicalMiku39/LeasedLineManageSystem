@@ -5,6 +5,7 @@ import { DataTable, Loader, Metric, Notice } from './GroupRevenue.jsx';
 import { defaultManagers } from './ledger/config.js';
 import { SegmentBar, SegmentLegend } from './charts.jsx';
 import { beijingTime, money } from './utils.js';
+import { saveWorkbook } from './saveFile.js';
 
 export const strategicStatuses = [
   { key: 'penetrated', label: '已渗透', tone: 'rev-positive' },
@@ -270,7 +271,7 @@ export default function StrategicCustomers({ ref, kpiMode, refreshToken, onOpenL
           });
         }
         XLSX.utils.book_append_sheet(book, worksheet, group ? '集团专线' : showingManagers ? '客户经理渗透率' : '战客渗透');
-        XLSX.writeFile(book, group
+        await saveWorkbook(XLSX, book, group
           ? `战客专线-${group}.xlsx`
           : showingManagers ? '战客渗透率-客户经理.xlsx' : `战客专线渗透-${manager !== null ? `${manager || '未填写'}-` : ''}${filterByKey[status].label}.xlsx`);
       } catch (failure) {

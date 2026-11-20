@@ -4,6 +4,7 @@ import { apiBase, isAbort, jsonBody, requestJson } from './api.js';
 import { InlineError } from './components/Feedback.jsx';
 import { describeSource, isAlertEvent, securityEventLabels, securityLogCategories } from './securityLog.js';
 import { beijingTime } from './utils.js';
+import { saveFile } from './saveFile.js';
 import './settings.css';
 
 const certPath = '/settings/client-certs';
@@ -32,16 +33,8 @@ function day(value) {
   return value ? value.slice(0, 10) : '—';
 }
 
-function saveBlob(blob, fileName) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = fileName;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
-}
+// Backups and device certificates are saved like every other file made in the page.
+const saveBlob = (blob, fileName) => saveFile(blob, fileName);
 
 function downloadP12(issued) {
   const bytes = Uint8Array.from(atob(issued.p12), (char) => char.charCodeAt(0));
@@ -216,7 +209,7 @@ function Backups({ reloadKey, onCode, onDataRestored }) {
           const data = await response.json().catch(() => null);
           throw new Error(data?.error || `下载失败（${response.status}）`);
         }
-        saveBlob(await response.blob(), item.name);
+        await saveBlob(await response.blob(), item.name);
       }
     });
   }

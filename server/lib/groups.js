@@ -630,7 +630,7 @@ export function createGroupsRouter({ db, leasedLineSource, currentUser, normaliz
     ).all(code);
     const forecasts = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'kpi_forecast'").get()
       ? db.prepare(
-        `SELECT f.id, f.year, f.month, f.kind, f.product_type, f.line_count, f.landed_count, f.confidence,
+        `SELECT f.id, f.year, f.month, f.kind, f.product_type, f.line_count, f.landed_count, f.confidence, f.archive_status, f.archive_reason,
                 (SELECT note FROM kpi_forecast_progress p WHERE p.forecast_id = f.id ORDER BY p.id DESC LIMIT 1) AS latest_note,
                 (SELECT created_at FROM kpi_forecast_progress p WHERE p.forecast_id = f.id ORDER BY p.id DESC LIMIT 1) AS latest_at
          FROM kpi_forecast f WHERE f.group_code = ? ORDER BY f.year DESC, f.month DESC, f.id DESC LIMIT 30`
