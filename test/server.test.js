@@ -2242,6 +2242,25 @@ test('a registered forecast can be changed: month, count, product type, confiden
   db.exec("DELETE FROM leased_line WHERE group_product_code LIKE 'FEL%'");
 });
 
+test('the KPI form offers every manager, not only those with lines this year', async () => {
+  const insert = db.prepare(`INSERT INTO leased_line (group_code, group_name, group_product_code, product_name, product_status_name, manager_name, start_time, updated_at)
+    VALUES (?, '名单集团', ?, ?, '正常在用', ?, '2015-01-01', ?)`);
+  // An old line in a KPI product, a line outside the KPI products, and a name with spaces around it.
+  insert.run('MN001', 'MNL1', '互联网专线', '老线经理', nowIso());
+  insert.run('MN002', 'MNL2', '其他产品', '非KPI经理', nowIso());
+  insert.run('MN003', 'MNL3', '互联网专线', ' 带空格经理 ', nowIso());
+  insert.run('MN004', 'MNL4', '互联网专线', '', nowIso());
+  db.prepare('INSERT INTO group_directory (group_code, group_name, manager_name) VALUES (?, ?, ?)').run('MN900', '清单集团', '只在清单经理');
+
+  const names = (await (await request('/api/kpi?kpiMode=1')).json()).managerNames;
+  for (const name of ['老线经理', '非KPI经理', '带空格经理', '只在清单经理']) assert.equal(names.includes(name), true, name);
+  assert.equal(names.includes(''), false);
+  assert.equal(names.includes(' 带空格经理 '), false);
+  assert.equal(new Set(names).size, names.length, 'each name once');
+
+  db.exec("DELETE FROM leased_line WHERE group_product_code LIKE 'MNL%'; DELETE FROM group_directory WHERE group_code = 'MN900'");
+});
+
 test('logout invalidates the session cookie', async () => {
   const response = await request('/api/auth/logout', { method: 'POST' });
   assert.equal(response.status, 200);

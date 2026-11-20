@@ -128,7 +128,8 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
   // Only after the lookup for this exact code came back empty is the group treated as new.
   const unknownGroup = Boolean(code) && matches.keyword === code && !matched;
   const managerChoices = useMemo(
-    () => [...new Set([...defaultManagers, ...(data?.managers || []).map((row) => row.manager_name).filter((name) => name !== '未填写')])],
+    // The 18 first, then every other manager the ledger or the full group list names.
+    () => [...new Set([...defaultManagers, ...(data?.managerNames || []).filter((name) => !defaultManagers.includes(name)).sort((a, b) => a.localeCompare(b, 'zh-CN'))])],
     [data]
   );
 
@@ -164,13 +165,18 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
   async function addForecast(event) {
     event.preventDefault();
     setFormError('');
+    // A new group's manager has to be someone the system knows, not a misspelling.
+    if (unknownGroup && !managerChoices.includes(form.manager_name.trim())) {
+      setFormError('请从列表中选择客户经理：台账和全量集团清单中没有这个名字');
+      return;
+    }
     setSaving(true);
     try {
       await requestJson('/kpi/forecasts', jsonBody('POST', {
         kind: form.kind,
         group_code: code,
         group_name: matched ? matched.group_name : form.group_name.trim(),
-        manager_name: matched ? matched.manager_name : form.manager_name,
+        manager_name: matched ? matched.manager_name : form.manager_name.trim(),
         product_type: form.product_type,
         line_count: Number(form.line_count),
         year: Number(form.month.split('-')[0]),
@@ -616,10 +622,19 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
           <label>
             客户经理
             {unknownGroup ? (
-              <select value={form.manager_name} onChange={(event) => updateForm('manager_name', event.target.value)} required>
-                <option value="">选择客户经理</option>
-                {managerChoices.map((name) => <option key={name} value={name}>{name}</option>)}
-              </select>
+              <>
+                <input
+                  list="kpi-manager-options"
+                  value={form.manager_name}
+                  placeholder={`输入姓名查找，共 ${managerChoices.length} 位`}
+                  autoComplete="off"
+                  onChange={(event) => updateForm('manager_name', event.target.value)}
+                  required
+                />
+                <datalist id="kpi-manager-options">
+                  {managerChoices.map((name) => <option key={name} value={name} />)}
+                </datalist>
+              </>
             ) : (
               <input value={matched ? matched.manager_name || '未填写' : ''} readOnly placeholder="选中集团编码后自动带出" />
             )}

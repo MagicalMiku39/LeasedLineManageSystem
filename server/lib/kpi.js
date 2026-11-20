@@ -264,6 +264,14 @@ export function createKpiRouter({ db, leasedLineSource, currentUser, currentPeri
       months: openForecastMonths(now),
       confidenceLevels,
       productTypes,
+      // Everyone a forecast for a new group can be put under: every manager the ledger or the full
+      // group list names, whatever the KPI scope and whether or not they have lines this year.
+      managerNames: db.prepare(
+        `SELECT name FROM (
+           SELECT TRIM(manager_name) AS name FROM leased_line
+           UNION SELECT TRIM(manager_name) FROM group_directory
+         ) WHERE COALESCE(name, '') <> '' ORDER BY name`
+      ).all().map((row) => row.name),
       actual: { added, cancelled, net: actualNet },
       monthly,
       pace: elapsed === null ? null : { elapsed, dayOfYear: now.dayOfYear, daysInYear: now.daysInYear, expected: Math.round(target * elapsed) },
