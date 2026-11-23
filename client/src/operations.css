@@ -365,3 +365,44 @@ button.group-link:hover { background: none; box-shadow: none; text-decoration: u
 .kpi-archived-table tbody tr { color: #4a4a50; }
 .kpi-archive-result { align-self: end; margin: 0 0 8px; color: var(--muted); font-size: 13px; }
 .kpi-archive-result.kpi-edit-warn { color: var(--red); }
+
+/* ---------- 专线延伸台账 ---------- */
+.ext-page .operations-heading { align-items: flex-start; }
+.ext-page .operations-heading .primary { flex: none; }
+.ext-check { gap: 6px !important; }
+.ext-check input { width: 16px; height: 16px; margin: 0; }
+.ext-table .ext-name { display: block; font-weight: 500; }
+.ext-table td.ext-wrap { min-width: 120px; max-width: 220px; white-space: normal; overflow-wrap: anywhere; }
+.ext-missing { color: #a04e12; }
+.ext-dialog { width: min(720px, 100%); max-height: calc(100dvh - 32px); display: flex; flex-direction: column; }
+.ext-dialog > .kpi-progress-body, .ext-dialog .kpi-progress-body { overflow-y: auto; }
+.ext-dialog .scope-actions { margin-bottom: 12px; }
+.ext-form-title { margin: 16px 0 8px !important; font-size: 14px; }
+.ext-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.ext-tiers { margin-top: 12px; }
+.ext-tiers-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 13px; }
+.ext-tiers-head .text-button { height: auto; padding: 2px 0; font-size: 12px; }
+.ext-tier { display: grid; grid-template-columns: minmax(0, 1fr) 90px 70px 90px 32px; gap: 6px; align-items: center; margin-bottom: 6px; }
+.ext-tier input { min-width: 0; width: 100%; height: 36px; padding: 0 10px; border: 1px solid var(--control); border-radius: var(--radius-sm); background: var(--surface); font-size: 13px; }
+.ext-tier input:nth-child(2), .ext-tier input:nth-child(3) { text-align: right; font-variant-numeric: tabular-nums; }
+.ext-tier button { width: 32px; height: 32px; padding: 0; }
+.ext-tier-sum { text-align: right; font-variant-numeric: tabular-nums; font-size: 13px; }
+.ext-tier-total { margin: 4px 0 0; font-size: 12px; text-align: right; }
+.ext-note { margin: 0 0 10px; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.ext-warn { margin: 0 0 6px; color: #a04e12; font-size: 13px; line-height: 1.6; }
+.ext-source { margin: 8px 0 4px; font-size: 13px; }
+.ext-source summary { cursor: pointer; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+.ext-source pre { max-height: 220px; overflow: auto; margin: 8px 0 0; padding: 10px 12px; background: #f6f7f9; border-radius: 6px; font: inherit; font-size: 12px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ext-history { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.ext-mail-search { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.ext-mail-list { display: grid; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; max-height: 46dvh; overflow-y: auto; }
+.ext-mail-list button { display: grid; gap: 3px; width: 100%; height: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); box-shadow: none; text-align: left; white-space: normal; }
+.ext-mail-list strong { font-size: 13px; overflow-wrap: anywhere; }
+.ext-mail-list small { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.ext-mail-list .ext-snippet { color: #4a4a50; }
+@media (max-width: 640px) {
+  .ext-fields { grid-template-columns: minmax(0, 1fr); }
+  .ext-tier { grid-template-columns: minmax(0, 1fr) 72px 56px 32px; }
+  .ext-tier-sum { display: none; }
+  .ext-page .operations-heading { flex-direction: column; }
+}

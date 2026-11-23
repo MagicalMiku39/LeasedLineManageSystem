@@ -41,7 +41,9 @@ export const restoreScopes = {
       ['line_warning_mark', '预警标记'],
       ['kpi_forecast', 'KPI 预计任务'],
       ['kpi_forecast_match', 'KPI 落地确认'],
-      ['kpi_forecast_progress', 'KPI 进展记录']
+      ['kpi_forecast_progress', 'KPI 进展记录'],
+      ['line_extension', '专线延伸台账'],
+      ['line_extension_log', '专线延伸台账修改记录']
     ]
   },
   strategic: {

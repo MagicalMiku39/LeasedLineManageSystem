@@ -2355,6 +2355,127 @@ test('a forecast is archived, not deleted: done or dropped with a reason, out of
   db.exec("DELETE FROM leased_line WHERE group_product_code = 'ACL1'");
 });
 
+const extensionMail = `政企客户部：
+        我司重要集团客户武汉百佳妇产医院有限公司，集团编码：1270103117，有专线延伸服务项目建档需求，专线延伸合同金额：2601元，项目责任人：客户经理周明，项目由铁通执行交付。当前已联系属地交付商完成项目结算材料，详见附件，该项目移动侧利润5%。
+        订购资费档次：数据专线延伸服务档次二150元/次，15次；数据专线延伸服务档次一9元/次，39次；折扣100%，总出账价格：2601元。售前确认书金额：2470.90元。
+        现申请产品建档，妥否，请批示！`;
+
+test('a 专线延伸 filing mail is read out field by field, and what does not add up is said', async () => {
+  const { parseExtensionMail, mailText } = await import('../server/lib/extension-parse.js');
+  const { draft, missing, warnings, tierTotal } = parseExtensionMail(extensionMail);
+  assert.deepEqual({ ...draft, tiers: undefined }, {
+    group_code: '1270103117', group_name: '武汉百佳妇产医院有限公司', manager_name: '周明',
+    contract_amount: 2601, billing_amount: 2601, presale_amount: 2470.9, discount: 100, profit_rate: 5, deliverer: '铁通', tiers: undefined
+  });
+  assert.deepEqual(draft.tiers, [
+    { name: '数据专线延伸服务档次二', level: 2, price: 150, times: 15, subtotal: 2250 },
+    { name: '数据专线延伸服务档次一', level: 1, price: 9, times: 39, subtotal: 351 }
+  ]);
+  assert.deepEqual([missing, warnings, tierTotal], [[], [], 2601]);
+
+  // The same mail as HTML, with thousands separators.
+  const html = '<div>我司重要集团客户武汉百佳妇产医院有限公司，集团编码：1270103117，</div><p>合同金额：2,601元&nbsp;项目责任人：客户经理周明，项目由铁通执行交付。</p><p>订购资费档次：数据专线延伸服务档次二150元/次，15次；数据专线延伸服务档次一9元/次，39次；折扣100%，总出账价格：2,601.00元。</p>';
+  assert.equal(mailText(html).includes('<'), false);
+  const fromHtml = parseExtensionMail(html);
+  assert.deepEqual([fromHtml.draft.contract_amount, fromHtml.draft.billing_amount, fromHtml.draft.tiers.length], [2601, 2601, 2]);
+  // Missing figures stay empty, never 0, and are listed.
+  const thin = parseExtensionMail('集团客户某某公司，集团编码：123456789，项目由铁通执行交付。');
+  assert.deepEqual([thin.draft.contract_amount, thin.draft.billing_amount, thin.draft.manager_name], [null, null, '']);
+  assert.deepEqual(thin.missing, ['客户经理', '合同金额', '出账金额', '售前确认书金额', '订购资费档次']);
+  // Figures that do not add up are pointed out.
+  const off = parseExtensionMail(extensionMail.replace('总出账价格：2601元', '总出账价格：2700元'));
+  assert.deepEqual(off.warnings, ['各档次合计 2601 元（折扣后），与出账金额 2700 元不一致', '合同金额 2601 元与出账金额 2700 元不一致']);
+});
+
+test('专线延伸台账: read from the mailbox, checked, saved once per mail, filled in later, every change logged', async (t) => {
+  const { agentMail } = await import('../server/lib/agent-mail.js');
+  const searches = [];
+  t.mock.method(agentMail, 'search', async (options) => {
+    searches.push(options);
+    return [
+      { message_id: 'msg_ext1', subject: '关于武汉百佳妇产医院专线延伸建档的请示', from: { name: '周明', email: 'zm@example.com' }, created_at: '2026-11-20T02:00:00Z', snippet: '我司重要集团客户<b>武汉百佳</b>' },
+      { message_id: 'msg_ext2', subject: '另一封', from: { email: 'x@example.com' }, created_at: '2026-11-21T02:00:00Z', snippet: '' }
+    ];
+  });
+  t.mock.method(agentMail, 'read', async (id) => ({
+    message_id: id, subject: '关于武汉百佳妇产医院专线延伸建档的请示', from: { name: '周明', email: 'zm@example.com' }, created_at: '2026-11-20T02:00:00Z',
+    body: extensionMail, body_format: 'PLAIN', attachments: [{ filename: '结算材料.pdf', attachment_id: 'att_1' }]
+  }));
+  db.prepare(`INSERT INTO leased_line (group_code, group_name, group_product_code, group_product_account_id, product_name, product_status_name, manager_name, updated_at)
+    VALUES ('1270103117', '武汉百佳妇产医院有限公司', '2705404918972', '9300123', '互联网专线', '正常在用', '王某', ?)`).run(nowIso());
+
+  assert.equal((await request('/api/extensions/mail', {}, false)).status, 401);
+  const list = await (await request('/api/extensions/mail')).json();
+  assert.deepEqual([list.q, searches[0].q, list.messages.length, list.messages[0].snippet, list.messages[0].importedId], ['专线延伸', '专线延伸', 2, '我司重要集团客户武汉百佳', null]);
+
+  const parsed = await (await request('/api/extensions/mail/msg_ext1/parse', { method: 'POST' })).json();
+  assert.deepEqual([parsed.draft.group_code, parsed.draft.billing_amount, parsed.mail.attachments, parsed.importedId], ['1270103117', 2601, ['结算材料.pdf'], null]);
+  // The mail's manager differs from the ledger's: said, not silently changed.
+  assert.deepEqual(parsed.warnings, ['邮件写的客户经理是 周明，台账中是 王某']);
+  assert.equal((await request('/api/extensions/mail/bad id/parse', { method: 'POST' })).status, 400);
+
+  // Saving: what the mail said, as checked by a person; the three later fields start empty.
+  const save = (body) => request('/api/extensions', { method: 'POST', body });
+  assert.equal((await save({ source: 'manual' })).status, 400, 'a group is needed');
+  assert.equal((await save({ ...parsed.draft, contract_amount: -1, source: 'manual' })).status, 400);
+  assert.equal((await save({ ...parsed.draft, source: 'mail', mail: { id: 'not-an-id' } })).status, 400);
+  const created = await save({ ...parsed.draft, source: 'mail', mail: parsed.mail, text: parsed.text });
+  assert.equal(created.status, 201);
+  const row = await created.json();
+  assert.deepEqual([row.group_name, row.manager_name, row.billing_amount, row.tiers.length, row.mail_attachments, row.missing], ['武汉百佳妇产医院有限公司', '周明', 2601, 2, ['结算材料.pdf'], ['产品编码', '产品账户', '下游单位']]);
+  assert.equal((await save({ ...parsed.draft, source: 'mail', mail: parsed.mail })).status, 409, 'one mail, one record');
+  assert.equal((await (await request('/api/extensions/mail')).json()).messages[0].importedId, row.id);
+
+  // Filling in the rest: the product code is the number, and it finds its line.
+  const patch = (body) => request(`/api/extensions/${row.id}`, { method: 'PATCH', body });
+  assert.equal((await patch({ product_code: 'pg.dt.zx.hlw' })).status, 400);
+  assert.equal((await patch({ downstream_kind: 'nonsense' })).status, 400);
+  assert.equal((await patch({ downstream_kind: 'other' })).status, 400, 'a named unit needs its name');
+  const filled = await (await patch({ product_code: '2705404918972', product_account: '9300123', downstream_kind: 'supplier' })).json();
+  assert.deepEqual([filled.downstream, filled.missing, filled.line.group_product_code, filled.changed], ['供应商安排', [], '2705404918972', 3]);
+  const named = await (await patch({ downstream_kind: 'other', downstream_name: '某某通信工程公司' })).json();
+  assert.equal(named.downstream, '某某通信工程公司');
+  const self = await (await patch({ downstream_kind: 'self', downstream_name: '不该留下' })).json();
+  assert.deepEqual([self.downstream, self.downstream_name], ['自施工', null]);
+  const tiers = await (await patch({ tiers: [{ name: '档次一', price: 9, times: 40 }] })).json();
+  assert.deepEqual(tiers.tiers, [{ name: '档次一', price: 9, times: 40, subtotal: 360 }]);
+  assert.equal((await patch({ tiers: [{ name: '档次一', price: 9, times: 0 }] })).status, 400);
+
+  const history = await (await request(`/api/extensions/${row.id}/log`)).json();
+  const fields = history.filter((entry) => entry.action === 'edit').map((entry) => entry.field_name);
+  for (const field of ['product_code', 'product_account', 'downstream_kind', 'downstream_name', 'tiers']) assert.equal(fields.includes(field), true, field);
+  assert.equal(history.at(-1).action, '从邮件录入');
+  assert.equal((await (await request(`/api/extensions/${row.id}/text`)).json()).text.includes('武汉百佳妇产医院有限公司'), true);
+
+  // Pasted text and a blank record take the same path.
+  const pasted = await (await request('/api/extensions/parse', { method: 'POST', body: { text: extensionMail } })).json();
+  assert.equal(pasted.draft.presale_amount, 2470.9);
+  assert.equal((await request('/api/extensions/parse', { method: 'POST', body: { text: ' ' } })).status, 400);
+  const manual = await (await save({ group_name: '手动集团', source: 'manual' })).json();
+
+  const ledger = await (await request('/api/extensions')).json();
+  assert.deepEqual([ledger.summary.count, ledger.summary.billing, ledger.summary.incomplete], [2, 2601, 1]);
+  const exportedRows = async (query = '') => {
+    const response = await request(`/api/extensions/export/xlsx${query}`);
+    assert.equal(response.status, 200);
+    const book = XLSX.read(Buffer.from(await response.arrayBuffer()));
+    return XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[0]], { raw: false });
+  };
+  const everything = await exportedRows();
+  assert.deepEqual(everything.map((item) => item.集团名称).sort(), ['手动集团', '武汉百佳妇产医院有限公司'].sort());
+  assert.equal(everything.find((item) => item.集团名称 === '武汉百佳妇产医院有限公司').集团编码, '1270103117');
+  // The export follows the page's filter: only the rows it is showing.
+  assert.deepEqual((await exportedRows(`?ids=${manual.id}`)).map((item) => item.集团名称), ['手动集团']);
+  assert.deepEqual(await exportedRows('?ids='), []);
+  assert.equal((await request(`/api/extensions/${manual.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM line_extension_log WHERE extension_id = ? AND action = 'delete'").get(manual.id).count, 1, 'the deletion stays on record');
+
+  const scopes = (await (await request('/api/settings/backups')).json()).scopes.find((scope) => scope.key === 'ledger').tables;
+  assert.equal(scopes.includes('专线延伸台账'), true);
+
+  db.exec("DELETE FROM line_extension; DELETE FROM line_extension_log; DELETE FROM leased_line WHERE group_product_code = '2705404918972'");
+});
+
 test('logout invalidates the session cookie', async () => {
   const response = await request('/api/auth/logout', { method: 'POST' });
   assert.equal(response.status, 200);

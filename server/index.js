@@ -28,6 +28,7 @@ import { createKpiRouter } from './lib/kpi.js';
 import { createStrategicRouter } from './lib/strategic.js';
 import { createGroupsRouter } from './lib/groups.js';
 import { createShareService } from './lib/share.js';
+import { createExtensionRouter } from './lib/extension.js';
 import { createFillPort, securityHeaders } from './lib/fill-port.js';
 import { createWorkbenchRouter } from './lib/workbench.js';
 import { clientCertPaths, createClientCertListener, requestSource } from './lib/client-cert.js';
@@ -1063,6 +1064,7 @@ app.get('/api/stats', (req, res) => {
 
 const revenueRouter = createRevenueRouter({ db, uploadDir, leasedLineSource });
 app.use('/api/revenue', revenueRouter);
+app.use('/api/extensions', createExtensionRouter({ db, currentUser }));
 app.use('/api/warnings', createWarningsRouter({ db, leasedLineSource, currentUser, fillLinks: shareService.forMail }));
 const clientCertFiles = clientCertPaths();
 const clientCertListener = createClientCertListener({ app, paths: clientCertFiles });

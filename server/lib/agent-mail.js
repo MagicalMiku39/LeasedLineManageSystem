@@ -46,6 +46,22 @@ export function createAgentMail({ execute = promisify(execFile), binary = () => 
         return { available: false, loggedIn: false };
       }
     },
+    /** Inbox messages matching words in their subject or body, newest first. Reading only. */
+    async search({ q, limit = 30, after } = {}) {
+      const args = ['message', '+search', '--q', String(q), '--dir', 'inbox', '--limit', String(Math.min(Math.max(Number(limit) || 30, 1), 50))];
+      if (after) args.push('--after', String(after));
+      const data = await invoke(args);
+      return Array.isArray(data?.data) ? data.data : [];
+    },
+    /** One message in full: body, sender, time and the names of its attachments. Reading only. */
+    async read(id) {
+      if (!/^msg_[A-Za-z0-9_-]+$/.test(String(id))) {
+        const error = new Error('邮件编号不正确');
+        error.uncertain = false;
+        throw error;
+      }
+      return invoke(['message', '+read', '--id', String(id)]);
+    },
     async send({ recipient, cc, subject, body, copy = true }) {
       const copies = copy ? defaultCc() : [];
       if (copy && cc && JSON.stringify(cc) !== JSON.stringify(copies)) {

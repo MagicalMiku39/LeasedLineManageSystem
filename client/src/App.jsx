@@ -6,6 +6,7 @@ import AppHeader from './components/AppHeader.jsx';
 import SubTabs from './components/SubTabs.jsx';
 import { AuthStatusView, LoginView, SetupView } from './components/AuthViews.jsx';
 import { NoticeBar } from './components/Feedback.jsx';
+import ExtensionLedger from './ExtensionLedger.jsx';
 import FillPage from './FillPage.jsx';
 import GroupRevenue from './GroupRevenue.jsx';
 import Groups from './Groups.jsx';
@@ -27,10 +28,11 @@ import { beijingMonth, beijingTime } from './utils.js';
 const securitySeenKey = 'ledger-security-seen';
 const settingsCategoryKey = 'ledger-settings-category';
 
-// 台账 has two parts under one menu: the ledger itself and its import history.
+// 台账 under one menu: the ledger itself, its import history, and the extension-service projects.
 const ledgerSections = [
   { key: 'ledger', label: '台账明细' },
-  { key: 'imports', label: '导入记录' }
+  { key: 'imports', label: '导入记录' },
+  { key: 'extensions', label: '延伸台账' }
 ];
 
 const refreshTitles = {
@@ -40,6 +42,7 @@ const refreshTitles = {
   revenue: '重新读取收入数据',
   operations: '重新读取运营中心当前页面',
   imports: '重新读取导入记录',
+  extensions: '重新读取专线延伸台账',
   settings: '重新读取设置'
 };
 
@@ -77,6 +80,7 @@ function App() {
   const revenueActions = useRef(null);
   const operationsActions = useRef(null);
   const groupsActions = useRef(null);
+  const extensionActions = useRef(null);
   // Which group's profile the 集团 page shows; null is the list. A new object each time, so the page follows it.
   const [groupFocus, setGroupFocus] = useState({ groupCode: null });
   const [groupsRevision, setGroupsRevision] = useState(0);
@@ -254,6 +258,8 @@ function App() {
     ? { kind: 'dialog', title: '导入收入报表', open: () => revenueActions.current?.openImport() }
     : activeView === 'groups'
       ? { kind: 'dialog', title: '导入全量集团清单', open: () => groupsActions.current?.openImport() }
+    : activeView === 'extensions'
+      ? { kind: 'dialog', title: '从邮件录入专线延伸项目', label: '邮件录入', open: () => extensionActions.current?.openImport() }
     : activeView === 'operations' && operationsSection === 'strategic'
       ? { kind: 'dialog', title: '导入战客清单', open: () => operationsActions.current?.openImport?.() }
       : { kind: 'file', title: '导入专线台账 Excel', busy: uploading, onFile: uploadLedgerExcel };
@@ -261,6 +267,7 @@ function App() {
   const exportActions = {
     operations: { title: '导出运营中心当前页面', run: () => operationsActions.current?.exportData() },
     groups: { title: '导出集团（跟随当前筛选）', run: () => groupsActions.current?.exportData() },
+    extensions: { title: '导出专线延伸台账（跟随当前筛选）', run: () => extensionActions.current?.exportData() },
     revenue: { title: '导出当前收入视图', run: () => revenueActions.current?.exportData(), disabled: !revenueExportReady }
   };
   const ledgerExport = { title: '导出台账', run: exportLedger, menu: ledgerExportMenu };
@@ -299,6 +306,10 @@ function App() {
     }
     if (activeView === 'groups') {
       groupsActions.current?.refresh();
+      return;
+    }
+    if (activeView === 'extensions') {
+      extensionActions.current?.refresh();
       return;
     }
     if (activeView === 'settings') {
@@ -355,6 +366,8 @@ function App() {
         );
       case 'groups':
         return <Groups ref={groupsActions} kpiMode={kpiMode} refreshToken={groupsRevision} onOpenLine={openDetail} focus={groupFocus} onForecast={forecastForGroup} />;
+      case 'extensions':
+        return <ExtensionLedger ref={extensionActions} refreshToken={importsRevision} tabs={ledgerTabs} />;
       case 'imports':
         return <ImportRecords refreshToken={importsRevision} onOpenLine={openDetail} focus={importsFocus} tabs={ledgerTabs} />;
       case 'settings':

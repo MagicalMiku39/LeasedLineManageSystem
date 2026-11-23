@@ -10,7 +10,7 @@ export const views = [
   { key: 'revenue', label: '集团收入', icon: CircleDollarSign },
   { key: 'operations', label: '运营中心', icon: ListChecks }
 ];
-const menuOf = { imports: 'ledger' };
+const menuOf = { imports: 'ledger', extensions: 'ledger' };
 
 // "导出" with several choices: each item is { key, label, hint, run }.
 function ExportMenu({ items }) {
@@ -90,7 +90,7 @@ export default function AppHeader({
         </label>
         {importAction.kind === 'dialog' ? (
           <button type="button" className="upload-button" title={importAction.title} onClick={importAction.open}>
-            <Upload size={16} /> 导入 Excel
+            <Upload size={16} /> {importAction.label || '导入 Excel'}
           </button>
         ) : (
           <label className={`upload-button${importAction.busy ? ' busy' : ''}`} title={importAction.title}>
