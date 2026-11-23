@@ -146,7 +146,7 @@ export function WarningDigestDialog({ asOf, kpiMode, onClose, onSent, onConfigur
 
   return <dialog ref={dialog} className="warning-mail-dialog warning-digest-dialog" onCancel={(event) => { if (sending) event.preventDefault(); else onClose(); }} aria-labelledby="warning-digest-title">
     <div className="warning-mail-title"><h3 id="warning-digest-title">汇总发送欠费预警</h3><button title="关闭" disabled={sending} onClick={onClose}><X size={18} /></button></div>
-    <p className="operations-rule">统计日期 {asOf}。每位客户经理一封邮件，列出其名下全部欠费停机专线（不含已标“忽略”的），并附本月和本年度净增。勾选后点击发送；发送后这些专线标为“提醒”。</p>
+    <p className="operations-rule">统计日期 {asOf} · 发送后这些专线标为“提醒”</p>
     {data && <p className="operations-rule">抄送：{data.cc?.join('；') || '—'}{data.withoutManager > 0 ? ` · 另有 ${data.withoutManager} 条专线没有客户经理，未列入` : ''}</p>}
     {data?.fillLink && managers.length > 0 && (
       <label className="warning-digest-link">

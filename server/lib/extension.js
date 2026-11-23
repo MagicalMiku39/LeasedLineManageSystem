@@ -1,8 +1,16 @@
 import { Router } from 'express';
 import XLSX from './xlsx.js';
 import { agentMail } from './agent-mail.js';
-import { mailText, parseExtensionMail } from './extension-parse.js';
+import { lineTypes, mailText, parseExtensionMail } from './extension-parse.js';
+import { extensionNetCents, reportMonths, reportedExtensionPairs } from './extension-revenue.js';
 import { ensureGroupDirectory } from './groups.js';
+
+// The calendar month (Beijing time) of a moment, as YYYY-MM.
+const beijingMonth = (value) => {
+  const time = Date.parse(value || '');
+  return Number.isFinite(time) ? new Date(time + 8 * 3600 * 1000).toISOString().slice(0, 7) : null;
+};
+const validBillingMonth = (value) => /^[1-9]\d{3}-(0[1-9]|1[0-2])$/.test(value);
 
 // Who builds the downstream part of a project. A named unit is kept as written.
 export const downstreamKinds = { self: '自施工', supplier: '供应商安排', other: '其他单位' };
@@ -15,7 +23,8 @@ const amountFields = ['contract_amount', 'billing_amount', 'presale_amount', 'di
 const fieldLabels = {
   group_code: '集团编码', group_name: '集团名称', manager_name: '客户经理', deliverer: '交付商',
   contract_amount: '合同金额', billing_amount: '出账金额', presale_amount: '售前确认书金额', discount: '折扣', profit_rate: '移动侧利润',
-  product_code: '产品编码', product_account: '产品账户', downstream_kind: '下游单位', downstream_name: '下游单位名称', tiers: '订购档次', remark: '备注'
+  product_code: '产品编码', product_account: '产品账户', downstream_kind: '下游单位', downstream_name: '下游单位名称', tiers: '订购档次', remark: '备注',
+  billing_month: '出账月份', line_type: '专线类型'
 };
 
 /**
@@ -80,6 +89,17 @@ export function createExtensionRouter({ db, currentUser, mail = agentMail }) {
     skipped_at TEXT
   );
   `);
+
+  // 出账月份 and 专线类型 decide where the project's revenue counts in 集团收入. Rows from before
+  // they existed take the month of their mail (or of entry) and the type their tiers name.
+  const existingColumns = new Set(db.prepare("SELECT name FROM pragma_table_info('line_extension')").all().map((row) => row.name));
+  if (!existingColumns.has('billing_month')) db.exec('ALTER TABLE line_extension ADD COLUMN billing_month TEXT');
+  if (!existingColumns.has('line_type')) db.exec('ALTER TABLE line_extension ADD COLUMN line_type TEXT');
+  for (const row of db.prepare('SELECT id, mail_received_at, created_at, tiers_json, mail_text, billing_month, line_type FROM line_extension WHERE billing_month IS NULL OR line_type IS NULL').all()) {
+    const month = row.billing_month || beijingMonth(row.mail_received_at) || beijingMonth(row.created_at);
+    const named = lineTypes.filter((type) => `${row.tiers_json} ${row.mail_text || ''}`.includes(`${type}延伸`));
+    db.prepare('UPDATE line_extension SET billing_month = ?, line_type = ? WHERE id = ?').run(month, row.line_type || (named.length === 1 ? named[0] : null), row.id);
+  }
 
   const username = (req) => currentUser(req)?.username || '';
   const text = (value) => String(value ?? '').trim();
@@ -196,10 +216,38 @@ export function createExtensionRouter({ db, currentUser, mail = agentMail }) {
       }
       values.tiers_json = JSON.stringify(tiers);
     }
+    if (Object.hasOwn(body, 'billing_month')) {
+      const month = text(body.billing_month);
+      if (!validBillingMonth(month)) return { error: '请填写出账月份（年-月）' };
+      values.billing_month = month;
+    }
+    if (Object.hasOwn(body, 'line_type')) {
+      const type = text(body.line_type);
+      if (!lineTypes.includes(type)) return { error: '请选择专线类型：数据专线或互联网专线' };
+      values.line_type = type;
+    }
     if (!partial) {
       if (!values.group_code && !values.group_name) return { error: '请至少填写集团编码或集团名称' };
+      if (!values.billing_month) return { error: '请填写出账月份（年-月）' };
+      if (!values.line_type) return { error: '请选择专线类型：数据专线或互联网专线' };
     }
     return { values };
+  }
+
+  // Where a project's revenue stands in 集团收入, for each row of the list.
+  function revenueStates(rows) {
+    const months = [...new Set(rows.map((row) => row.billing_month).filter(Boolean))];
+    const imported = reportMonths(db);
+    const reported = reportedExtensionPairs(db, months.filter((month) => imported.has(month)));
+    return (row) => {
+      if (!row.billing_month || row.billing_amount === null || !row.group_code) {
+        return { state: 'incomplete', text: `缺少${[!row.group_code && '集团编码', row.billing_amount === null && '出账金额', !row.billing_month && '出账月份'].filter(Boolean).join('、')}，不计入收入`, revenue: null };
+      }
+      const revenue = extensionNetCents(row.billing_amount) / 100;
+      if (!imported.has(row.billing_month)) return { state: 'waiting', text: `${row.billing_month} 收入报表未导入，导入后计入`, revenue };
+      if (reported.has(`${row.billing_month}|${row.group_code}`)) return { state: 'in-report', text: '该月报表已有延伸服务收入，以报表为准，不重复计入', revenue };
+      return { state: 'counted', text: `已计入 ${row.billing_month} ${row.line_type || ''}收入`, revenue };
+    };
   }
 
   const columnsOf = (values) => Object.keys(values);
@@ -312,7 +360,7 @@ export function createExtensionRouter({ db, currentUser, mail = agentMail }) {
       ON CONFLICT(message_id) DO UPDATE SET subject = excluded.subject, content_key = excluded.content_key, parsed_at = excluded.parsed_at`)
       .run(id, text(message?.subject).slice(0, maxText) || null, key, new Date().toISOString());
     res.json({
-      ...result(parsed, { messageId: id, subject: message?.subject }),
+      ...result(parsed, { messageId: id, subject: message?.subject, at: message?.created_at }),
       importedId: existing?.id ?? null,
       skipped: skipped?.skipped_at ? { reason: skipped.skipped_reason, at: skipped.skipped_at } : null,
       mail: {
@@ -363,7 +411,8 @@ export function createExtensionRouter({ db, currentUser, mail = agentMail }) {
       notes.push(`邮件写的集团名称与${known.from === 'ledger' ? '台账' : '全量集团清单'}不同：${known.group_name}`);
     }
     return {
-      draft: parsed.draft, missing: parsed.missing, warnings: notes, repeats: repeatsOf(parsed.draft, mailInfo),
+      // The service is billed in full in one month: by default the month the filing mail arrived (or today, for pasted text).
+      draft: { ...parsed.draft, billing_month: beijingMonth(mailInfo?.at) || beijingMonth(new Date().toISOString()) }, missing: parsed.missing, warnings: notes, repeats: repeatsOf(parsed.draft, mailInfo),
       tierTotal: parsed.tierTotal, text: parsed.text.slice(0, maxBody)
     };
   }
@@ -371,7 +420,9 @@ export function createExtensionRouter({ db, currentUser, mail = agentMail }) {
   // ---- the ledger ----
 
   router.get('/', (req, res) => {
-    const rows = db.prepare('SELECT * FROM line_extension ORDER BY created_at DESC, id DESC').all().map(view);
+    const raw = db.prepare('SELECT * FROM line_extension ORDER BY created_at DESC, id DESC').all();
+    const stateOf = revenueStates(raw);
+    const rows = raw.map((row) => ({ ...view(row), revenue: stateOf(row) }));
     const managers = [...new Set(rows.map((row) => row.manager_name).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
     const sum = (key) => Math.round(rows.reduce((total, row) => total + (row[key] ?? 0), 0) * 100) / 100;
     res.json({
@@ -424,12 +475,12 @@ export function createExtensionRouter({ db, currentUser, mail = agentMail }) {
     res.status(201).json(view(db.prepare('SELECT * FROM line_extension WHERE id = ?').get(id)));
   });
 
-  router.patch('/:id', (req, res) => {
-    const id = Number(req.params.id);
+  /** One edit, checked and logged: from the page, or from a fill link. Returns { status, error } or { row, changes }. */
+  function edit(id, body, by) {
     const existing = db.prepare('SELECT * FROM line_extension WHERE id = ?').get(id);
-    if (!existing) return res.status(404).json({ error: '记录不存在' });
-    const checked = clean(req.body || {}, { partial: true });
-    if (checked.error) return res.status(400).json({ error: checked.error });
+    if (!existing) return { status: 404, error: '记录不存在' };
+    const checked = clean(body || {}, { partial: true });
+    if (checked.error) return { status: 400, error: checked.error };
     const changes = [];
     for (const [field, value] of Object.entries(checked.values)) {
       const before = existing[field] ?? null;
@@ -437,23 +488,60 @@ export function createExtensionRouter({ db, currentUser, mail = agentMail }) {
       changes.push({ field: field === 'tiers_json' ? 'tiers' : field, from: before === null ? null : String(before), to: value === null ? null : String(value) });
     }
     const merged = { ...existing, ...checked.values };
-    if (!merged.group_code && !merged.group_name) return res.status(400).json({ error: '请至少保留集团编码或集团名称' });
+    if (!merged.group_code && !merged.group_name) return { status: 400, error: '请至少保留集团编码或集团名称' };
     if (changes.length) {
       const at = new Date().toISOString();
-      const values = { ...checked.values, updated_by: username(req), updated_at: at };
+      const values = { ...checked.values, updated_by: by, updated_at: at };
       const columns = columnsOf(values);
       db.exec('BEGIN IMMEDIATE');
       try {
         db.prepare(`UPDATE line_extension SET ${columns.map((key) => `${key} = ?`).join(', ')} WHERE id = ?`).run(...columns.map((key) => values[key]), id);
-        log(id, 'edit', changes, username(req), at);
+        log(id, 'edit', changes, by, at);
         db.exec('COMMIT');
       } catch (error) {
         db.exec('ROLLBACK');
         throw error;
       }
     }
-    res.json({ ...view(db.prepare('SELECT * FROM line_extension WHERE id = ?').get(id)), changed: changes.length });
+    return { row: db.prepare('SELECT * FROM line_extension WHERE id = ?').get(id), changes };
+  }
+
+  router.patch('/:id', (req, res) => {
+    const result = edit(Number(req.params.id), req.body, username(req));
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    res.json({ ...view(result.row), changed: result.changes.length });
   });
+
+  /**
+   * What a fill link may see and do: one manager's projects that still lack 产品编码, 产品账户 or
+   * 下游单位, and those three filled in, nothing else. A project of another manager reads as missing.
+   */
+  const linkFields = ['product_code', 'product_account', 'downstream_kind', 'downstream_name'];
+  const forLink = (row) => {
+    const shown = view(row);
+    return {
+      id: shown.id, group_code: shown.group_code, group_name: shown.group_name, line_type: shown.line_type, billing_month: shown.billing_month,
+      contract_amount: shown.contract_amount, billing_amount: shown.billing_amount, deliverer: shown.deliverer, tiers: shown.tiers,
+      product_code: shown.product_code, product_account: shown.product_account, downstream_kind: shown.downstream_kind,
+      downstream_name: shown.downstream_name, downstream: shown.downstream, missing: shown.missing, created_at: shown.created_at
+    };
+  };
+  router.service = {
+    fields: linkFields,
+    downstreamKinds,
+    labels: fieldLabels,
+    pendingOf(manager) {
+      return db.prepare('SELECT * FROM line_extension WHERE manager_name = ? ORDER BY created_at DESC, id DESC').all(manager)
+        .map(forLink).filter((row) => row.missing.length);
+    },
+    fill(id, manager, body, by) {
+      const row = Number.isSafeInteger(id) ? db.prepare('SELECT id, manager_name FROM line_extension WHERE id = ?').get(id) : null;
+      if (!row || row.manager_name !== manager) return { status: 404, error: '这个延伸项目不在这个链接的范围内' };
+      const allowed = Object.fromEntries(linkFields.filter((field) => Object.hasOwn(body || {}, field)).map((field) => [field, body[field]]));
+      const result = edit(id, allowed, by);
+      return result.error ? result : { row: forLink(result.row), changes: result.changes };
+    }
+  };
 
   // Deleting keeps the log, with the row as it was, so the deletion can be traced.
   router.delete('/:id', (req, res) => {
@@ -485,19 +573,26 @@ export function createExtensionRouter({ db, currentUser, mail = agentMail }) {
     const only = typeof req.query.ids === 'string'
       ? new Set(req.query.ids.split(',').map(Number).filter((id) => Number.isInteger(id) && id > 0))
       : null;
-    const rows = db.prepare('SELECT * FROM line_extension ORDER BY created_at DESC, id DESC').all()
-      .filter((row) => !only || only.has(row.id)).map(view);
+    const raw = db.prepare('SELECT * FROM line_extension ORDER BY created_at DESC, id DESC').all()
+      .filter((row) => !only || only.has(row.id));
+    const stateOf = revenueStates(raw);
+    const rows = raw.map((row) => ({ ...view(row), revenue: stateOf(row) }));
     const sheet = XLSX.utils.json_to_sheet(rows.map((row) => ({
       集团编码: row.group_code || '', 集团名称: row.group_name || '', 客户经理: row.manager_name || '',
-      合同金额: row.contract_amount, 出账金额: row.billing_amount, 售前确认书金额: row.presale_amount,
+      专线类型: row.line_type || '', 出账月份: row.billing_month || '',
+      合同金额: row.contract_amount, 出账金额: row.billing_amount, '收入（除税 6%）': row.revenue.revenue, 收入计入情况: row.revenue.text,
+      售前确认书金额: row.presale_amount,
       折扣: row.discount === null ? '' : `${row.discount}%`, 移动侧利润: row.profit_rate === null ? '' : `${row.profit_rate}%`,
       交付商: row.deliverer || '',
       订购档次: row.tiers.map((tier) => `${tier.name} ${tier.price}元/次×${tier.times}次`).join('；'),
       产品编码: row.product_code || '', 产品账户: row.product_account || '', 下游单位: row.downstream || '',
       备注: row.remark || '', 来源邮件: row.mail_subject || '', 录入时间: row.created_at
     })));
+    // Codes stay text, so leading zeros survive.
+    const header = XLSX.utils.sheet_to_json(sheet, { header: 1 })[0] || [];
+    const textColumns = ['集团编码', '产品编码', '产品账户'].map((name) => header.indexOf(name)).filter((index) => index >= 0);
     for (let index = 1; index <= rows.length; index += 1) {
-      for (const column of [0, 11, 12]) {
+      for (const column of textColumns) {
         const cell = sheet[XLSX.utils.encode_cell({ r: index, c: column })];
         if (cell) { cell.t = 's'; cell.z = '@'; }
       }

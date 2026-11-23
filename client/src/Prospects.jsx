@@ -155,7 +155,6 @@ export default function Prospects({ kpiMode, stamp, onOpenGroup, onForecast, onQ
         <section className="rev-section">
           <div className="rev-section-heading">
             <h3>各客户经理的潜客 <span>{managers.length}</span></h3>
-            <span className="rev-caption">点击客户经理查看其名下的集团 · 战客和要客多的排在前面</span>
           </div>
           <div className="rev-manager-scope" role="status">
             <span>{onlyDefaults ? '当前范围：指定 18 位客户经理' : '当前范围：全部客户经理'}</span>
@@ -188,7 +187,6 @@ export default function Prospects({ kpiMode, stamp, onOpenGroup, onForecast, onQ
         <section className="rev-section">
           <div className="rev-section-heading">
             <h3>{manager !== null ? `${manager || '未填写客户经理'} · ` : ''}{lost ? '已流失集团' : '未开通专线的集团'} <span>{count(data.total)}</span></h3>
-            <span className="rev-caption">{lost ? '按已销户专线数从多到少' : '没有数据的项显示“—”，排在有数据的之后'}</span>
           </div>
           {manager !== null && (
             <p className="group-hints">

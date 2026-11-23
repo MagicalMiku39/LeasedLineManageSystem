@@ -2068,6 +2068,17 @@ button.segment {
   overflow-wrap: anywhere;
 }
 
+.readonly-grid strong.readonly-money {
+  font-variant-numeric: tabular-nums;
+}
+
+.drawer-note {
+  margin: -6px 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .log-list {
   display: grid;
   gap: 10px;

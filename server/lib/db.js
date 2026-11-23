@@ -15,6 +15,11 @@ export const db = new DatabaseSync(dbPath);
 db.exec('PRAGMA journal_mode = WAL;');
 db.exec('PRAGMA foreign_keys = ON;');
 db.exec(schemaSql);
+// Hand-kept IP addresses, added after the table was first made.
+const lineColumns = new Set(db.prepare("SELECT name FROM pragma_table_info('leased_line')").all().map((row) => row.name));
+for (const column of ['ipv4_address', 'ipv6_address']) {
+  if (!lineColumns.has(column)) db.exec(`ALTER TABLE leased_line ADD COLUMN ${column} TEXT`);
+}
 
 export function nowIso() {
   return new Date().toISOString();

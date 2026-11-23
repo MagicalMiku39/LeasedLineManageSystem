@@ -59,5 +59,7 @@ export const editableFields = [
   'business_owner',
   'project_name',
   'ledger_status',
-  'remark'
+  'remark',
+  'ipv4_address',
+  'ipv6_address'
 ];

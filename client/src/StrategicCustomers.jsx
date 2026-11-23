@@ -180,7 +180,6 @@ function GroupDetail({ data, onOpenLine, onOpenGroup }) {
         <Metric label="台账记录" value={lines.length} note="含未开通或回退" />
       </section>
       <section className="rev-section">
-        <div className="rev-section-heading"><h3>集团专线 <span>{lines.length}</span></h3><span className="rev-caption">点击集团产品编码查看专线详情</span></div>
         <DataTable rows={rankedLines} rowKey="id" initialSort="kindRank" columns={[
           { key: 'group_product_code', label: '集团产品编码', render: (row) => <button className="rev-link" onClick={() => onOpenLine(row.id)}>{row.group_product_code || `记录 ${row.id}`}</button> },
           { key: 'kindRank', label: '类别', render: (row) => <span className={row.kind === 'active' ? 'rev-positive' : row.kind === 'cancelled' ? 'rev-negative' : ''}>{lineKinds[row.kind]}</span> },
@@ -353,7 +352,6 @@ export default function StrategicCustomers({ ref, kpiMode, refreshToken, onOpenL
             <section className="rev-section">
               <div className="rev-section-heading">
                 <h3>客户经理战客渗透率 <span>{managers.length}</span></h3>
-                <span className="rev-caption">渗透率 = 已渗透 ÷ 战客集团 · 点击客户经理查看其集团</span>
               </div>
               <DataTable rows={managers} rowKey="name" initialSort="penetrationRate" columns={[
                 { key: 'name', label: '客户经理', render: (row) => <button className="rev-link" onClick={() => openManager(row.name)}>{row.name || '未填写'}</button> },
@@ -372,7 +370,6 @@ export default function StrategicCustomers({ ref, kpiMode, refreshToken, onOpenL
             <section className="rev-section">
               <div className="rev-section-heading">
                 <h3>{`${manager !== null ? `${manager || '未填写客户经理'} · ` : ''}${status === 'all' ? '全部战客集团' : `${filterByKey[status].label}战客集团`}`} <span>{rows.length}</span></h3>
-                <span className="rev-caption">点击集团查看其专线</span>
               </div>
               <div className="rev-group-filters">
                 <label className="rev-search"><Search size={16} /><input aria-label="搜索集团" placeholder="集团名称、集团编码或客户经理" value={keyword} onChange={(event) => setKeyword(event.target.value)} /></label>

@@ -1914,6 +1914,67 @@ test('the arrears summary can carry the manager\'s own fill link', async (t) => 
   db.exec("DELETE FROM share_link_source; DELETE FROM share_link; DELETE FROM warning_mail_digest; DELETE FROM line_warning_mark WHERE line_id IN (SELECT id FROM leased_line WHERE group_product_code LIKE 'DL-%'); DELETE FROM leased_line WHERE group_product_code LIKE 'DL-%'; DELETE FROM warning_mail_contact WHERE manager_key = 'job:DLJ'");
 });
 
+test('a fill link lets a manager fill in the product code, account and downstream unit of their own 延伸 projects, and nothing else', async (t) => {
+  serverModule.shareService.resetLimits();
+  const add = async (body) => (await request('/api/extensions', { method: 'POST', body: { source: 'manual', billing_month: '2026-11', line_type: '数据专线', confirmRepeat: true, ...body } })).json();
+  const pending = await add({ group_code: 'EF001', group_name: '延填集团一', manager_name: '延填经理', billing_amount: 2601 });
+  const second = await add({ group_code: 'EF002', group_name: '延填集团二', manager_name: '延填经理', billing_amount: 100 });
+  const complete = await add({ group_code: 'EF003', group_name: '延填集团三', manager_name: '延填经理', product_code: '2705400000001', product_account: '93001', downstream_kind: 'self' });
+  const theirs = await add({ group_code: 'EF004', group_name: '别人的延伸', manager_name: '别的经理', billing_amount: 50 });
+  db.prepare(`INSERT INTO leased_line (group_code, group_name, group_product_code, product_name, product_status_name, ledger_status, manager_name, updated_at)
+    VALUES ('EF001', '延填集团一', 'EFL1', '数据专线', '正常在用', '正常在用', '延填经理', ?)`).run(nowIso());
+
+  const make = async (scopes) => (await (await request('/api/share-links', { method: 'POST', body: { manager: '延填经理', scopes, days: 3 } })).json()).path.slice('/fill/'.length);
+  const token = await make(['extension']);
+  const ledgerOnly = await make(['ledger']);
+  const page = await (await request(`/api/fill/${token}`, {}, false)).json();
+  // Only this manager's projects still missing something; no mail text or amounts beyond the facts shown.
+  assert.deepEqual(page.extensions.map((item) => item.group_code).sort(), ['EF001', 'EF002']);
+  assert.deepEqual(Object.keys(page.downstreamKinds), ['self', 'supplier', 'other']);
+  assert.equal(Object.hasOwn(page.extensions[0], 'mail_text'), false);
+  assert.deepEqual((await (await request(`/api/fill/${ledgerOnly}`, {}, false)).json()).extensions, []);
+
+  const fill = (id, body, link = token) => request(`/api/fill/${link}/extensions/${id}`, { method: 'POST', body }, false);
+  assert.equal((await fill(pending.id, { product_code: '1' }, ledgerOnly)).status, 403, 'a link without this scope cannot write it');
+  assert.equal((await fill(theirs.id, { product_code: '1' })).status, 404, 'another manager\'s project reads as missing');
+  assert.equal((await fill(pending.id, { product_code: 'pg.dt.zx.hlw' })).status, 400, 'the product code is the number');
+  assert.equal((await fill(pending.id, { downstream_kind: 'other' })).status, 400, 'a named unit needs its name');
+  // Only the three fields are taken: an amount or group sent along is ignored.
+  const saved = await (await fill(pending.id, { product_code: '2705404918972', downstream_kind: 'other', downstream_name: '某某通信工程公司', billing_amount: 1, group_name: '改名' })).json();
+  assert.deepEqual([saved.changed, saved.row.downstream, saved.row.missing, saved.row.billing_amount, saved.row.group_name], [3, '某某通信工程公司', ['产品账户'], 2601, '延填集团一']);
+  const finished = await (await fill(pending.id, { product_account: '93009' })).json();
+  assert.deepEqual(finished.row.missing, []);
+
+  // Logged on the project, and as a submission of the link.
+  const history = await (await request(`/api/extensions/${pending.id}/log`)).json();
+  assert.deepEqual(history.filter((entry) => entry.action === 'edit').map((entry) => [entry.field_name, entry.changed_by]).sort(), [
+    ['downstream_kind', '填报链接·延填经理'], ['downstream_name', '填报链接·延填经理'], ['product_account', '填报链接·延填经理'], ['product_code', '填报链接·延填经理']
+  ]);
+  const submissions = db.prepare("SELECT kind, summary FROM share_submission WHERE kind = 'extension' ORDER BY id").all();
+  assert.equal(submissions.length, 2);
+  assert.match(submissions[0].summary, /^延伸项目 延填集团一：.*下游单位 空 → 其他单位/);
+  // Filled in: no longer listed next time.
+  assert.deepEqual((await (await request(`/api/fill/${token}`, {}, false)).json()).extensions.map((item) => item.group_code), ['EF002']);
+
+  // The arrears summary's link carries this scope for a manager with 延伸 projects to fill in.
+  const { agentMail } = await import('../server/lib/agent-mail.js');
+  t.mock.method(agentMail, 'defaultCc', () => ['audit@example.com']);
+  const sent = [];
+  t.mock.method(agentMail, 'send', async (message) => { sent.push(message); return { queued: true }; });
+  db.prepare(`INSERT INTO leased_line(group_product_code, group_code, group_name, manager_name, manager_job_no, product_name, product_status_name, status_time, total_arrears, start_time)
+    VALUES ('EF-ARR', 'EF001', '延填集团一', '延填经理', 'EFJ', '数据专线', '停机', '2026-06-01', 100, '2025-01-01')`).run();
+  await request('/api/warnings/mail/contacts', { method: 'PUT', body: { key: 'job:EFJ', email: 'ef@example.com' } });
+  const preview = await (await request('/api/warnings/digest/preview', { method: 'POST', body: { asOf: '2026-10-23', kpiMode: '0' } })).json();
+  const mine = preview.managers.find((item) => item.manager === '延填经理');
+  assert.equal((await request(`/api/warnings/digest/${mine.id}/send`, { method: 'POST', body: { withLink: true, origin: 'https://ledger.example.com:3443' } })).status, 200);
+  assert.match(sent[0].body, /补充专线延伸项目的产品编码、产品账户和下游单位/);
+  const mailed = /\/fill\/([A-Za-z0-9_-]{43})/.exec(sent[0].body)[1];
+  assert.deepEqual((await (await request(`/api/fill/${mailed}`, {}, false)).json()).scopes, ['ledger', 'progress', 'extension']);
+
+  db.exec("DELETE FROM share_submission; DELETE FROM share_link_source; DELETE FROM share_link; DELETE FROM warning_mail_digest; DELETE FROM line_warning_mark WHERE line_id IN (SELECT id FROM leased_line WHERE group_code LIKE 'EF%'); DELETE FROM leased_line WHERE group_code LIKE 'EF%'; DELETE FROM warning_mail_contact WHERE manager_key = 'job:EFJ'; DELETE FROM line_extension; DELETE FROM line_extension_log");
+  assert.ok(complete.id && second.id);
+});
+
 test('the fill port serves fill links and nothing else, and mailed links use its public address', async (t) => {
   const { agentMail } = await import('../server/lib/agent-mail.js');
   const sent = [];
@@ -2208,6 +2269,74 @@ test('the group pages and the manager page show ARPU from the revenue report', a
   db.exec("DELETE FROM revenue_source_row; DELETE FROM revenue_batch_month; DELETE FROM revenue_batch; DELETE FROM leased_line WHERE group_product_code LIKE 'ARL%'");
 });
 
+test('专线延伸服务 from 专线延伸台账 counts as 专线收入 of its month, under its line product, 6% off, never twice', async () => {
+  const insert = db.prepare(`INSERT INTO leased_line (group_code, group_name, group_product_code, product_name, product_status_name, ledger_status, manager_name, start_time, updated_at)
+    VALUES (?, ?, ?, '数据专线', '正常在用', '正常在用', '延伸经理', '2025-01-01', ?)`);
+  insert.run('EX001', '延伸集团一', 'EXL1', nowIso());
+  insert.run('EX001', '延伸集团一', 'EXL2', nowIso());
+  const row = (extra) => ({ 月份: 203103, 集团编码: 'EX001', 集团名称: '延伸集团一', 集团客户经理ID: 'EM1', 集团客户经理: '延伸经理', 产品大类ID: 'SJZX', 产品大类名称: '数据专线',
+    政企分类产品: '专线', 出账金额: '0', 税费: '0', 调账金额: '0', 调账税费: '0', 计算后信息化收入: 0, ...extra });
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet([
+    row({ 计算后信息化收入: 1000 }),
+    row({ 政企分类产品: '其他', 产品大类ID: 'YUN', 产品大类名称: '云服务', 计算后信息化收入: 300 }),
+    // This group's report already carries its extension service.
+    row({ 集团编码: 'EX002', 集团名称: '延伸集团二', 产品大类ID: 'YS', 产品大类名称: '专线延伸服务', 计算后信息化收入: 500 })
+  ]), 'BOSS');
+  const form = new FormData();
+  form.append('file', new Blob([XLSX.write(book, { type: 'buffer', bookType: 'xlsx' })]), '收入.xlsx');
+  const preview = await (await request('/api/revenue/imports/preview', { method: 'POST', body: form })).json();
+  assert.equal((await request(`/api/revenue/imports/${preview.id}/commit`, { method: 'POST', body: { replace: true } })).status, 200);
+
+  const add = async (body) => {
+    const response = await request('/api/extensions', { method: 'POST', body: { source: 'manual', confirmRepeat: true, ...body } });
+    assert.equal(response.status, 201);
+    return response.json();
+  };
+  await add({ group_code: 'EX001', group_name: '延伸集团一', billing_amount: 1060, billing_month: '2031-03', line_type: '数据专线' });
+  await add({ group_code: 'EX001', group_name: '延伸集团一', billing_amount: 106, billing_month: '2031-03', line_type: '互联网专线' });
+  await add({ group_code: 'EX002', group_name: '延伸集团二', billing_amount: 530, billing_month: '2031-03', line_type: '数据专线' });
+  await add({ group_code: 'EX003', group_name: '延伸集团三', manager_name: '延伸经理', billing_amount: 212, billing_month: '2031-03', line_type: '数据专线' });
+  await add({ group_code: 'EX001', group_name: '延伸集团一', billing_amount: 2120, billing_month: '2031-05', line_type: '数据专线' });
+  await add({ group_code: 'EX001', group_name: '延伸集团一', billing_month: '2031-03', line_type: '数据专线' });
+
+  // The 延伸台账 says where each project's revenue stands.
+  const states = (await (await request('/api/extensions')).json()).rows.map((item) => [item.group_code, item.billing_month, item.billing_amount, item.revenue.state, item.revenue.revenue]);
+  assert.deepEqual(states.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))), [
+    ['EX001', '2031-03', 1060, 'counted', 1000],
+    ['EX001', '2031-03', 106, 'counted', 100],
+    ['EX001', '2031-03', null, 'incomplete', null],
+    ['EX001', '2031-05', 2120, 'waiting', 2000],
+    ['EX002', '2031-03', 530, 'in-report', 500],
+    ['EX003', '2031-03', 212, 'counted', 200]
+  ].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
+
+  // 集团收入: line revenue and total carry the extension; the report figure is kept as it was.
+  const summary = await (await request('/api/revenue/summary?month=2031-03&kpiMode=0')).json();
+  const groups = Object.fromEntries(summary.groups.map((item) => [item.groupCode, item]));
+  assert.deepEqual([groups.EX001.reportRevenue, groups.EX001.extensionRevenue, groups.EX001.lineRevenue, groups.EX001.totalRevenue], [1300, 1100, 2100, 2400]);
+  // ARPU: 2100 of line revenue over the group's 2 lines.
+  assert.deepEqual([groups.EX001.arpu, groups.EX001.monthEndLineCount], [1050, 2]);
+  // The report already had EX002's service: nothing added.
+  assert.deepEqual([groups.EX002.extensionRevenue, groups.EX002.lineRevenue], [0, 500]);
+  // A group with no report rows that month still shows its extension revenue.
+  assert.deepEqual([groups.EX003.hasReport, groups.EX003.lineRevenue, groups.EX003.totalRevenue, groups.EX003.managerName], [false, 200, 200, '延伸经理']);
+  assert.deepEqual([summary.summary.extensionRevenue, summary.summary.lineRevenue, summary.summary.reportRevenue], [1300, 2800, 1800]);
+  // …and is counted under that manager, not as a second, nameless one.
+  assert.deepEqual(summary.managers.map((item) => [item.id, item.name, item.lineRevenue, item.extensionRevenue]), [['EM1', '延伸经理', 2800, 1300]]);
+
+  // The group detail: each line product carries its own extension.
+  const detail = await (await request('/api/revenue/groups/EX001?month=2031-03&kpiMode=0')).json();
+  const products = Object.fromEntries(detail.products.map((item) => [item.productName, [item.revenue, item.extensionRevenue]]));
+  assert.deepEqual(products, { 数据专线: [2000, 1000], 互联网专线: [100, 100], 云服务: [300, null] });
+  assert.deepEqual(detail.extensions.map((item) => [item.lineType, item.grossAmount, item.revenue, item.inReport]), [['数据专线', 1060, 1000, false], ['互联网专线', 106, 100, false]]);
+  assert.equal(detail.reconciliation.extensionNet, 1100);
+  const other = await (await request('/api/revenue/groups/EX002?month=2031-03&kpiMode=0')).json();
+  assert.equal(other.reconciliation.messages.some((message) => message.includes('以报表为准')), true);
+
+  db.exec("DELETE FROM line_extension; DELETE FROM line_extension_log; DELETE FROM revenue_source_row; DELETE FROM revenue_batch_month; DELETE FROM revenue_batch; DELETE FROM leased_line WHERE group_product_code LIKE 'EXL%'");
+});
+
 test('a registered forecast can be changed: month, count, product type, confidence and group, each noted', async () => {
   const insert = db.prepare(`INSERT INTO leased_line (group_code, group_name, group_product_code, product_name, product_status_name, manager_name, updated_at)
     VALUES (?, ?, ?, '互联网专线', '正常在用', ?, ?)`);
@@ -2365,7 +2494,7 @@ test('a 专线延伸 filing mail is read out field by field, and what does not a
   const { draft, missing, warnings, tierTotal } = parseExtensionMail(extensionMail);
   assert.deepEqual({ ...draft, tiers: undefined }, {
     group_code: '1270103117', group_name: '武汉百佳妇产医院有限公司', manager_name: '周明',
-    contract_amount: 2601, billing_amount: 2601, presale_amount: 2470.9, discount: 100, profit_rate: 5, deliverer: '铁通', tiers: undefined
+    contract_amount: 2601, billing_amount: 2601, presale_amount: 2470.9, discount: 100, profit_rate: 5, deliverer: '铁通', line_type: '数据专线', tiers: undefined
   });
   assert.deepEqual(draft.tiers, [
     { name: '数据专线延伸服务档次二', level: 2, price: 150, times: 15, subtotal: 2250 },
@@ -2381,7 +2510,8 @@ test('a 专线延伸 filing mail is read out field by field, and what does not a
   // Missing figures stay empty, never 0, and are listed.
   const thin = parseExtensionMail('集团客户某某公司，集团编码：123456789，项目由铁通执行交付。');
   assert.deepEqual([thin.draft.contract_amount, thin.draft.billing_amount, thin.draft.manager_name], [null, null, '']);
-  assert.deepEqual(thin.missing, ['客户经理', '合同金额', '出账金额', '售前确认书金额', '订购资费档次']);
+  assert.deepEqual(thin.missing, ['客户经理', '合同金额', '出账金额', '售前确认书金额', '订购资费档次', '专线类型（数据专线或互联网专线）']);
+  assert.equal(parseExtensionMail('互联网专线延伸服务档次一 9元/次，2次').draft.line_type, '互联网专线');
   // Figures that do not add up are pointed out.
   const off = parseExtensionMail(extensionMail.replace('总出账价格：2601元', '总出账价格：2700元'));
   assert.deepEqual(off.warnings, ['各档次合计 2601 元（折扣后），与出账金额 2700 元不一致', '合同金额 2601 元与出账金额 2700 元不一致']);
@@ -2410,6 +2540,7 @@ test('专线延伸台账: read from the mailbox, checked, saved once per mail, f
 
   const parsed = await (await request('/api/extensions/mail/msg_ext1/parse', { method: 'POST' })).json();
   assert.deepEqual([parsed.draft.group_code, parsed.draft.billing_amount, parsed.mail.attachments, parsed.importedId], ['1270103117', 2601, ['结算材料.pdf'], null]);
+  assert.deepEqual([parsed.draft.billing_month, parsed.draft.line_type], ['2026-11', '数据专线'], 'billed in the month the mail came, under the line product it names');
   // The mail's manager differs from the ledger's: said, not silently changed.
   assert.deepEqual(parsed.warnings, ['邮件写的客户经理是 周明，台账中是 王某']);
   assert.equal((await request('/api/extensions/mail/bad id/parse', { method: 'POST' })).status, 400);
@@ -2454,7 +2585,9 @@ test('专线延伸台账: read from the mailbox, checked, saved once per mail, f
   const pasted = await (await request('/api/extensions/parse', { method: 'POST', body: { text: extensionMail } })).json();
   assert.equal(pasted.draft.presale_amount, 2470.9);
   assert.equal((await request('/api/extensions/parse', { method: 'POST', body: { text: ' ' } })).status, 400);
-  const manual = await (await save({ group_name: '手动集团', source: 'manual' })).json();
+  assert.equal((await save({ group_name: '手动集团', source: 'manual' })).status, 400, 'a billing month and line type are needed');
+  assert.equal((await save({ group_name: '手动集团', source: 'manual', billing_month: '2026-13', line_type: '数据专线' })).status, 400);
+  const manual = await (await save({ group_name: '手动集团', source: 'manual', billing_month: '2026-10', line_type: '互联网专线' })).json();
 
   const ledger = await (await request('/api/extensions')).json();
   assert.deepEqual([ledger.summary.count, ledger.summary.billing, ledger.summary.incomplete], [2, 2601, 1]);
@@ -2537,6 +2670,41 @@ test('专线延伸台账: a mail forwarded twice is pointed out, set aside on re
   assert.equal(typeof agentMail.trash, 'undefined');
 
   db.exec('DELETE FROM line_extension; DELETE FROM line_extension_log; DELETE FROM line_extension_mail');
+});
+
+test('a line keeps hand-entered IPv4 and IPv6 addresses: checked, tidied, logged, searchable and exported', async () => {
+  const id = Number(db.prepare(`INSERT INTO leased_line (group_code, group_name, group_product_code, product_name, product_status_name, a_end_address, z_end_address, updated_at)
+    VALUES ('IP001', '地址集团', 'IPL1', '互联网专线', '正常在用', '某某路1号机房', '某某大道100号', ?)`).run(nowIso()).lastInsertRowid);
+  const patch = (body) => request(`/api/ledger/${id}`, { method: 'PATCH', body });
+
+  // Several addresses, any separator, with or without a prefix length; repeats dropped.
+  const saved = await (await patch({ ipv4_address: '10.1.1.1/30，10.1.1.2 10.1.1.1/30', ipv6_address: '240e:1::1/64' })).json();
+  assert.deepEqual([saved.ipv4_address, saved.ipv6_address, saved.a_end_address], ['10.1.1.1/30、10.1.1.2', '240e:1::1/64', '某某路1号机房']);
+  for (const [field, value] of [['ipv4_address', '10.1.1.256'], ['ipv4_address', '10.1.1.1/33'], ['ipv4_address', '240e:1::1'], ['ipv6_address', '10.1.1.1'], ['ipv6_address', '240e::1/129'], ['ipv4_address', '10.1.1.1/30/1']]) {
+    const refused = await patch({ [field]: value });
+    assert.equal(refused.status, 400, `${field} ${value}`);
+    assert.match((await refused.json()).error, /不是有效的 IPv[46] 地址/);
+  }
+  assert.equal(db.prepare('SELECT ipv4_address FROM leased_line WHERE id = ?').get(id).ipv4_address, '10.1.1.1/30、10.1.1.2', 'a refused edit changes nothing');
+  // Clearing is allowed.
+  assert.equal((await (await patch({ ipv6_address: '' })).json()).ipv6_address, null);
+
+  const logged = db.prepare("SELECT field_name, new_value FROM change_log WHERE leased_line_id = ? ORDER BY id").all(id).map((row) => [row.field_name, row.new_value]);
+  assert.deepEqual(logged, [['ipv4_address', '10.1.1.1/30、10.1.1.2'], ['ipv6_address', '240e:1::1/64'], ['ipv6_address', null]]);
+
+  // Found by address in the ledger search, listed and exported with the line.
+  const found = await (await request('/api/ledger?kpiMode=0&keyword=10.1.1.2')).json();
+  assert.deepEqual(found.rows.map((row) => [row.group_product_code, row.ipv4_address, row.a_end_address, row.z_end_address]), [['IPL1', '10.1.1.1/30、10.1.1.2', '某某路1号机房', '某某大道100号']]);
+  const exported = await request('/api/ledger/export?kpiMode=0&keyword=IPL1');
+  const book = XLSX.read(Buffer.from(await exported.arrayBuffer()));
+  const sheetRows = XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[0]]);
+  assert.deepEqual([sheetRows[0].IPv4地址, sheetRows[0].A端地址], ['10.1.1.1/30、10.1.1.2', '某某路1号机房']);
+
+  // Batch edit never sets one address on many lines.
+  await request('/api/ledger/batch', { method: 'PATCH', body: { ids: [id], values: { ipv4_address: '1.1.1.1', remark: '批量' } } });
+  assert.equal(db.prepare('SELECT ipv4_address FROM leased_line WHERE id = ?').get(id).ipv4_address, '10.1.1.1/30、10.1.1.2');
+
+  db.exec(`DELETE FROM change_log WHERE leased_line_id = ${id}; DELETE FROM leased_line WHERE id = ${id}`);
 });
 
 test('logout invalidates the session cookie', async () => {

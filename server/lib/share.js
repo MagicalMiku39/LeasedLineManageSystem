@@ -10,7 +10,8 @@ import { confidenceLevels, forecastKinds } from './kpi.js';
 export const shareScopes = {
   ledger: '台账补充信息',
   progress: '商机进度',
-  report: '商机上报'
+  report: '商机上报',
+  extension: '专线延伸补充信息'
 };
 // The hand-kept ledger fields a link may write: fewer than the signed-in user can edit.
 export const fillFields = [
@@ -37,7 +38,7 @@ const hashToken = (token) => crypto.createHash('sha256').update(String(token)).d
  * expires or is revoked. Only the token's hash is stored, so a link cannot be read back out of
  * the database; every write goes through the same code as a signed-in edit and is logged.
  */
-export function createShareService({ db, currentUser, updateLine, kpi, productTypes, logEvent = () => {}, mail = agentMail, linkBase = (fallback) => fallback }) {
+export function createShareService({ db, currentUser, updateLine, kpi, extensions = () => null, productTypes, logEvent = () => {}, mail = agentMail, linkBase = (fallback) => fallback }) {
   db.exec(`
   CREATE TABLE IF NOT EXISTS share_link (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -309,7 +310,10 @@ export function createShareService({ db, currentUser, updateLine, kpi, productTy
       fillFields,
       lines: scopes.includes('ledger') ? linesOf(link.manager_name) : [],
       forecasts,
-      report: scopes.includes('report') ? { productTypes, months: kpi().openMonths(), confidenceLevels: confidenceLevels.filter((level) => level !== 'unrated'), kinds: forecastKinds } : null
+      report: scopes.includes('report') ? { productTypes, months: kpi().openMonths(), confidenceLevels: confidenceLevels.filter((level) => level !== 'unrated'), kinds: forecastKinds } : null,
+      // 专线延伸台账 projects of this manager still lacking 产品编码, 产品账户 or 下游单位.
+      extensions: scopes.includes('extension') ? extensions()?.pendingOf(link.manager_name) ?? [] : [],
+      downstreamKinds: scopes.includes('extension') ? extensions()?.downstreamKinds ?? {} : {}
     };
   }
 
@@ -363,6 +367,25 @@ export function createShareService({ db, currentUser, updateLine, kpi, productTy
     res.json({ line: linesOf(link.manager_name).find((item) => item.id === id) ?? null, changed: result.changes.length });
   });
 
+  publicRouter.post('/:token/extensions/:id', (req, res) => {
+    const link = linkFor(req, res, 'extension');
+    if (!link) return;
+    const service = extensions();
+    if (!service) return res.status(404).json({ error: '专线延伸台账不可用' });
+    const id = Number(req.params.id);
+    const body = req.body || {};
+    for (const field of service.fields) {
+      if (Object.hasOwn(body, field) && String(body[field] ?? '').length > maxText) return res.status(400).json({ error: `每项内容不能超过 ${maxText} 字` });
+    }
+    const result = service.fill(id, link.manager_name, body, actor(link));
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    if (result.changes.length) {
+      const shown = (field, value) => (field === 'downstream_kind' ? service.downstreamKinds[value] || '空' : value ?? '空');
+      record(req, link, 'extension', id, `延伸项目 ${result.row.group_name || result.row.group_code || id}：${result.changes.map((change) => `${service.labels[change.field] || change.field} ${shown(change.field, change.from)} → ${shown(change.field, change.to)}`).join('；')}`);
+    }
+    res.json({ row: result.row, changed: result.changes.length });
+  });
+
   publicRouter.post('/:token/forecasts/:id/progress', (req, res) => {
     const link = linkFor(req, res, 'progress');
     if (!link) return;
@@ -407,6 +430,8 @@ export function createShareService({ db, currentUser, updateLine, kpi, productTy
       logEvent('share_created', { username, source, detail: `${link.manager_name} · ${JSON.parse(link.scopes).map((key) => shareScopes[key]).join('、')} · 随${via}发送至 ${recipient}` });
     },
     scopeLabels: shareScopes,
+    // Scopes worth adding for this manager on top of the usual ones: 延伸 projects to fill in.
+    extraScopes: (manager) => (extensions()?.pendingOf(manager).length ? ['extension'] : []),
     base: (fallback) => linkBase(fallback)
   };
 

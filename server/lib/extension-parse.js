@@ -2,6 +2,8 @@
 // field is looked for on its own, and anything not found is left empty for a person to fill in
 // before saving. Nothing here guesses: a figure is either read from the text or missing.
 
+// The two line products an extension service can belong to.
+export const lineTypes = ['数据专线', '互联网专线'];
 const chineseDigits = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
 
 /** Plain text from a mail body that may be HTML. */
@@ -75,6 +77,11 @@ export function parseExtensionMail(raw) {
   const profit = first(flat, [/利润(?:率)?\s*[：:为是]?\s*([\d.]+)\s*[%％]/]);
   const discount = first(flat, [/折扣\s*[：:为是]?\s*([\d.]+)\s*[%％]/]);
   const tiers = parseTiers(flat);
+  // Which line product the service belongs to; its revenue counts under that product.
+  // "数据专线延伸服务" → 数据专线, "互联网专线延伸服务" → 互联网专线. Both, or neither, is left to a person.
+  const typesNamed = (pattern) => lineTypes.filter((type) => new RegExp(`${type}${pattern}`).test(flat));
+  const named = typesNamed('延伸').length ? typesNamed('延伸') : typesNamed('');
+  const lineType = named.length === 1 ? named[0] : '';
   const draft = {
     group_code: groupCode,
     group_name: groupName,
@@ -85,12 +92,14 @@ export function parseExtensionMail(raw) {
     discount: discount === '' ? null : Number(discount),
     profit_rate: profit === '' ? null : Number(profit),
     deliverer,
+    line_type: lineType,
     tiers
   };
 
   const labels = { group_code: '集团编码', group_name: '集团名称', manager_name: '客户经理', contract_amount: '合同金额', billing_amount: '出账金额', presale_amount: '售前确认书金额', deliverer: '交付商' };
   const missing = Object.entries(labels).filter(([key]) => draft[key] === '' || draft[key] === null).map(([, label]) => label);
   if (!tiers.length) missing.push('订购资费档次');
+  if (!lineType) missing.push('专线类型（数据专线或互联网专线）');
   const warnings = [];
   const tierTotal = tiers.length ? Math.round(tiers.reduce((sum, tier) => sum + (tier.subtotal ?? 0), 0) * 100) / 100 : null;
   const afterDiscount = tierTotal === null ? null : Math.round(tierTotal * ((draft.discount ?? 100) / 100) * 100) / 100;

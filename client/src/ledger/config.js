@@ -77,7 +77,9 @@ export const tableColumns = [
   { key: 'operation_owner', label: '运维负责人', defaultVisible: false },
   { key: 'business_owner', label: '商务负责人', defaultVisible: false },
   { key: 'project_name', label: '项目归属', defaultVisible: false },
-  { key: 'remark', label: '备注', defaultVisible: false }
+  { key: 'remark', label: '备注', defaultVisible: false },
+  { key: 'ipv4_address', label: 'IPv4地址', defaultVisible: false },
+  { key: 'ipv6_address', label: 'IPv6地址', defaultVisible: false }
 ];
 
 export const defaultVisibleColumns = tableColumns.filter((column) => column.defaultVisible).map((column) => column.key);
@@ -115,7 +117,9 @@ export const fieldLabels = {
   business_owner: '商务负责人',
   project_name: '项目归属',
   ledger_status: '台账状态',
-  remark: '备注'
+  remark: '备注',
+  ipv4_address: 'IPv4地址',
+  ipv6_address: 'IPv6地址'
 };
 
 export const advancedFilterKeys = ['groupCode', 'groupProductCode', 'bandwidth', 'zeroBilling', 'contractEndFrom', 'contractEndTo', 'statFilter'];

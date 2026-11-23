@@ -7,7 +7,7 @@ import { saveWorkbook } from './saveFile.js';
 
 const dayChoices = [1, 3, 7, 14, 30];
 const stateLabels = { active: '有效', expired: '已过期', revoked: '已作废' };
-const kindLabels = { ledger: '台账补充信息', progress: '商机进度', report: '商机上报' };
+const kindLabels = { ledger: '台账补充信息', progress: '商机进度', report: '商机上报', extension: '专线延伸补充信息' };
 
 /**
  * 填报链接: makes a link one manager can open without an account to fill in their own lines'
@@ -146,7 +146,6 @@ export default function ShareLinks({ ref, refreshToken }) {
       <section className="operations-heading">
         <div>
           <h2>填报链接</h2>
-          <p className="operations-rule">给一位客户经理生成专属链接。对方不用登录，只能看到并填写自己名下的内容；到期或作废后链接失效，每次填写都有记录。</p>
         </div>
       </section>
       {error && <p role="alert" className="operations-error">{error}</p>}
@@ -167,7 +166,7 @@ export default function ShareLinks({ ref, refreshToken }) {
                 <button type="button" onClick={() => pick(defaultManagers)}>选指定 18 位</button>
                 <button type="button" onClick={() => pick(managers)}>选全部有邮箱的</button>
                 <button type="button" onClick={() => pick([])}>清空</button>
-                <span className="operations-rule">已选 {chosen.length} 位 · 邮箱在“欠费销户预警 → 客户经理邮箱”中设置</span>
+                <span className="operations-rule">已选 {chosen.length} 位</span>
               </div>
               <ul className="share-batch-list">
                 {managers.map((name) => {
@@ -217,7 +216,7 @@ export default function ShareLinks({ ref, refreshToken }) {
                 <input type="checkbox" checked={form.scopes.includes(scope.key)} onChange={() => toggleScope(scope.key)} />
                 <span>
                   <strong>{scope.label}</strong>
-                  <small>{{ ledger: '名下在用专线的实际月资费、合同、续约、联系人、项目名称、备注', progress: '名下 KPI 预计任务的进展说明和已落地条数', report: '登记新的预计新增或预计销户，记在这位客户经理名下' }[scope.key]}</small>
+                  <small>{{ ledger: '名下在用专线的实际月资费、合同、续约、联系人、项目名称、备注', progress: '名下 KPI 预计任务的进展说明和已落地条数', report: '登记新的预计新增或预计销户，记在这位客户经理名下', extension: '名下专线延伸项目的产品编码、产品账户和下游单位（只列出还没填全的）' }[scope.key]}</small>
                 </span>
               </label>
             ))}
@@ -278,9 +277,8 @@ export default function ShareLinks({ ref, refreshToken }) {
       <section className="kpi-panel kpi-wide">
         <h3>填报记录 <span className="share-count">{submissions.length}</span></h3>
         <p className="operations-rule share-log-note">
-          {only ? `只看 ${only.manager} 的这条链接。` : '最近 200 条，全部链接。'}
+          {only ? `只看 ${only.manager} 的这条链接。` : ''}
           {only && <button type="button" className="text-button" onClick={() => setOnly(null)}>查看全部</button>}
-          台账的改动同时记在专线详情的修改记录里，商机进展记在该商机的进展里。
         </p>
         <div className="table-scroll">
           <table className="data-table share-table">

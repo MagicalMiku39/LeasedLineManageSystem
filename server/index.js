@@ -9,6 +9,7 @@ import { pathToFileURL } from 'node:url';
 import { db, dbPath, nowIso } from './lib/db.js';
 import { createBackupRouter, createBackupService } from './lib/backup.js';
 import { editableFields } from './lib/field-map.js';
+import { cleanAddresses, ipFields } from './lib/ip-address.js';
 import { importExcel } from './lib/import-excel.js';
 import { lastImportAt, listBatchChanges, listLineChanges } from './lib/ledger-changes.js';
 import {
@@ -133,6 +134,7 @@ const shareService = createShareService({
   currentUser,
   updateLine,
   kpi: () => kpiRouter,
+  extensions: () => extensionRouter.service,
   productTypes: kpiProductNames,
   logEvent: logSecurityEvent
 });
@@ -227,6 +229,8 @@ const manualLedgerColumns = [
   'project_name',
   'ledger_status',
   'remark',
+  'ipv4_address',
+  'ipv6_address',
   'updated_at'
 ];
 
@@ -361,9 +365,10 @@ export function buildLedgerWhere(query) {
     where.push(`(
       group_code LIKE ? OR group_name LIKE ? OR group_product_code LIKE ? OR
       group_user_name LIKE ? OR group_product_account_id LIKE ? OR product_name LIKE ? OR
-      manager_name LIKE ? OR a_end_address LIKE ? OR z_end_address LIKE ?
+      manager_name LIKE ? OR a_end_address LIKE ? OR z_end_address LIKE ? OR
+      ipv4_address LIKE ? OR ipv6_address LIKE ?
     )`);
-    params.push(keyword, keyword, keyword, keyword, keyword, keyword, keyword, keyword, keyword);
+    params.push(...Array(11).fill(keyword));
   }
 
   const exactFilters = {
@@ -578,7 +583,9 @@ const exportColumns = [
   ['商务负责人', 'business_owner'],
   ['项目归属', 'project_name'],
   ['台账状态', 'ledger_status'],
-  ['备注', 'remark']
+  ['备注', 'remark'],
+  ['IPv4地址', 'ipv4_address'],
+  ['IPv6地址', 'ipv6_address']
 ];
 
 app.get('/api/ledger/export', (req, res) => {
@@ -656,6 +663,7 @@ app.patch('/api/ledger/batch', (req, res) => {
 
   const updates = {};
   for (const field of editableFields) {
+    if (Object.hasOwn(ipFields, field)) continue;
     if (Object.hasOwn(req.body.values || {}, field) && req.body.values[field] !== '') {
       updates[field] = amountFields.has(field) ? numberOrNull(req.body.values[field]) : req.body.values[field] || null;
     }
@@ -733,6 +741,12 @@ function updateLine(id, body = {}, { fields = editableFields, by = 'admin', sour
   const updates = {};
   for (const field of editableFields) {
     if (fields.includes(field) && Object.hasOwn(body, field)) {
+      if (Object.hasOwn(ipFields, field)) {
+        const checked = cleanAddresses(body[field], ipFields[field]);
+        if (checked.error) return { status: 400, json: { error: checked.error } };
+        updates[field] = checked.value;
+        continue;
+      }
       updates[field] = amountFields.has(field) ? numberOrNull(body[field]) : body[field] || null;
     }
   }
@@ -1064,7 +1078,8 @@ app.get('/api/stats', (req, res) => {
 
 const revenueRouter = createRevenueRouter({ db, uploadDir, leasedLineSource });
 app.use('/api/revenue', revenueRouter);
-app.use('/api/extensions', createExtensionRouter({ db, currentUser }));
+const extensionRouter = createExtensionRouter({ db, currentUser });
+app.use('/api/extensions', extensionRouter);
 app.use('/api/warnings', createWarningsRouter({ db, leasedLineSource, currentUser, fillLinks: shareService.forMail }));
 const clientCertFiles = clientCertPaths();
 const clientCertListener = createClientCertListener({ app, paths: clientCertFiles });

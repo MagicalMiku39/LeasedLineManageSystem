@@ -202,7 +202,8 @@ td > .kpi-inline-select:first-child { margin-top: 0; }
 }
 @media(max-width: 700px) {
   .operations-heading { align-items: flex-start; flex-direction: column; }
-  .operations-summary { grid-template-columns: repeat(2, 1fr); }
+  .operations-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .operations-summary strong { display: block; font-size: clamp(22px, 7vw, 30px); overflow-wrap: anywhere; }
   .operations-filters label { width: 100%; flex-wrap: wrap; }
   .operations-filters .operations-search { flex-wrap: nowrap; }
   .operations-filters select { max-width: 100%; }

@@ -181,7 +181,6 @@ export default function ManagerDashboard({
     <main className="page manager-page">
       <div className="page-heading">
         <h2>客户经理规模与收入净增</h2>
-        <p>按所选月份统计本月、所在季度和年度；新增按开始时间，销户按状态时间。收入净增为月资费净增。点击客户经理姓名，在表格下方查看新增与销户明细。专线 ARPU = 当月报表专线收入 ÷ 当月月底在用专线数，{data?.arpuMonth ? `为 ${data.arpuMonth} 的数` : `${data?.month || month} 还没有导入收入报表，暂无数据`}。</p>
       </div>
 
       <section className="manager-controls" aria-label="客户经理统计条件">
@@ -232,7 +231,7 @@ export default function ManagerDashboard({
             <thead>
               <tr>
                 <th>客户经理</th>
-                <th className="num" title="当月报表专线收入 ÷ 当月月底在用专线数，按收入报表中的客户经理归属">专线 ARPU</th>
+                <th className="num" title="当月专线收入（含专线延伸服务）÷ 当月月底在用专线数，按收入报表中的客户经理归属">专线 ARPU</th>
                 {periods.map((period) => (
                   <React.Fragment key={period.key}>
                     <th className="num">{period.label}净增</th>

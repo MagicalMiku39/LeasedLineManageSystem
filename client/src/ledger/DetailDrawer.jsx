@@ -3,7 +3,7 @@ import { Save, X } from 'lucide-react';
 import { isAbort, jsonBody, requestJson } from '../api.js';
 import { InlineError } from '../components/Feedback.jsx';
 import { changeFieldLabels, changeTypeLabel } from '../ledgerChanges.js';
-import { beijingTime, displayValue, inputValue } from '../utils.js';
+import { beijingTime, displayMoney, displayValue, inputValue } from '../utils.js';
 import { batchFields, fieldLabels } from './config.js';
 
 // Fields the drawer edits: every batch-editable field plus renewal and contact details.
@@ -12,7 +12,51 @@ const editableKeys = [
   'renewal_status',
   'renewal_reminder_date',
   'customer_contact',
-  'customer_phone'
+  'customer_phone',
+  'ipv4_address',
+  'ipv6_address'
+];
+
+// What the imported ledger says about the line, shown as it is (it changes only on import).
+const importedSections = [
+  {
+    title: '专线信息',
+    fields: [
+      ['group_name', '集团名称'],
+      ['group_user_name', '专线名称'],
+      ['group_product_code', '集团产品编码'],
+      ['product_name', '产品名称'],
+      ['bandwidth', '专线带宽'],
+      ['product_status_name', '产品状态'],
+      ['a_end_address', 'A端地址'],
+      ['z_end_address', 'Z端地址'],
+      ['start_time', '开始时间'],
+      ['status_time', '状态时间'],
+      ['group_product_account_id', '产品账户ID'],
+      ['payment_method_name', '付费方式']
+    ]
+  },
+  {
+    title: '套餐与欠费',
+    fields: [
+      ['package_name', '活动套餐'],
+      ['package_fee', '套餐资费', 'money'],
+      ['package_effective_time', '套餐生效'],
+      ['package_expire_time', '套餐失效'],
+      ['total_arrears', '总欠费', 'money']
+    ]
+  },
+  {
+    title: '归属信息',
+    fields: [
+      ['manager_name', '客户经理'],
+      ['manager_job_no', '客户经理工号'],
+      ['region_name', '归属区分'],
+      ['node_name', '归属节点'],
+      ['group_level', '集团级别'],
+      ['industry_name_1', '行业类别']
+    ]
+  }
 ];
 
 const sections = [
@@ -34,6 +78,14 @@ const sections = [
       ['contract_end_date', '合同期结束', 'date'],
       ['renewal_status', '是否续约'],
       ['renewal_reminder_date', '续约提醒日期', 'date']
+    ]
+  },
+  {
+    title: '网络信息',
+    note: '可填多个地址，用逗号或空格分隔，可带掩码位数，如 10.1.1.1/30',
+    fields: [
+      ['ipv4_address', 'IPv4 地址', 'ip'],
+      ['ipv6_address', 'IPv6 地址', 'ip']
     ]
   },
   {
@@ -175,6 +227,9 @@ export default function DetailDrawer({ record, onClose, onSaved, onOpenGroup }) 
   }
 
   function renderField([key, label, type]) {
+    if (type === 'ip') {
+      return <label key={key}>{label}<input inputMode="url" autoCapitalize="off" spellCheck={false} maxLength={500} value={inputValue(form[key])} onChange={(e) => update(key, e.target.value)} /></label>;
+    }
     if (type === 'textarea') {
       return <label key={key}>{label}<textarea value={inputValue(form[key])} onChange={(e) => update(key, e.target.value)} /></label>;
     }
@@ -204,19 +259,24 @@ export default function DetailDrawer({ record, onClose, onSaved, onOpenGroup }) 
       </div>
 
       <div className="drawer-body">
-        <section>
-          <h3>基础信息</h3>
-          <div className="readonly-grid">
-            <span>集团名称</span><strong>{displayValue(record.group_name)}</strong>
-            <span>集团产品编码</span><strong>{displayValue(record.group_product_code)}</strong>
-            <span>产品名称</span><strong>{displayValue(record.product_name)}</strong>
-            <span>客户经理</span><strong>{displayValue(record.manager_name)}</strong>
-          </div>
-        </section>
+        {importedSections.map((section) => (
+          <section key={section.title}>
+            <h3>{section.title}</h3>
+            <div className="readonly-grid">
+              {section.fields.map(([key, label, type]) => (
+                <React.Fragment key={key}>
+                  <span>{label}</span>
+                  <strong className={type === 'money' ? 'readonly-money' : undefined}>{type === 'money' ? displayMoney(record[key]) : displayValue(record[key])}</strong>
+                </React.Fragment>
+              ))}
+            </div>
+          </section>
+        ))}
 
         {sections.map((section) => (
           <section key={section.title}>
             <h3>{section.title}</h3>
+            {section.note && <p className="drawer-note">{section.note}</p>}
             {section.fields.map(renderField)}
           </section>
         ))}

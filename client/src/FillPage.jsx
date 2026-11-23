@@ -92,6 +92,87 @@ function LineCard({ line, fields, token, onSaved }) {
   );
 }
 
+// One 专线延伸 project still lacking its product code, account or downstream unit.
+function ExtensionCard({ project, kinds, token, onSaved }) {
+  const initial = (row) => ({ product_code: text(row.product_code), product_account: text(row.product_account), downstream_kind: text(row.downstream_kind), downstream_name: text(row.downstream_name) });
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState(() => initial(project));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState('');
+  const before = initial(project);
+  const dirty = Object.keys(form).some((key) => form[key].trim() !== before[key]);
+  const set = (key) => (event) => { setForm({ ...form, [key]: event.target.value }); setDone(''); };
+
+  async function save(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    setDone('');
+    try {
+      const changed = Object.fromEntries(Object.keys(form).filter((key) => form[key].trim() !== before[key]).map((key) => [key, form[key].trim()]));
+      // The unit's name goes with its kind.
+      if (Object.hasOwn(changed, 'downstream_name') || form.downstream_kind === 'other') { changed.downstream_kind = form.downstream_kind; changed.downstream_name = form.downstream_name.trim(); }
+      const result = await requestJson(`/fill/${token}/extensions/${project.id}`, jsonBody('POST', changed));
+      onSaved(result.row);
+      setForm(initial(result.row));
+      setDone(result.row.missing.length ? `已保存，还差：${result.row.missing.join('、')}` : '已保存，信息已填全');
+    } catch (failure) {
+      setError(failure.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <li className="fill-card">
+      <button type="button" className="fill-card-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span>
+          <strong>{project.group_name || '未填写集团名称'}</strong>
+          <small>{project.group_code || '—'} · {project.line_type || '专线'}延伸服务 · 出账 {project.billing_amount == null ? '—' : `${money(project.billing_amount)} 元`}{project.billing_month ? ` · ${project.billing_month}` : ''}</small>
+          <small>{project.missing.length ? `待填：${project.missing.join('、')}` : '已填全'}{done ? ` · ${done}` : ''}</small>
+        </span>
+        {open ? <ChevronUp size={18} aria-hidden="true" /> : <ChevronDown size={18} aria-hidden="true" />}
+      </button>
+      {open && (
+        <form className="fill-form" onSubmit={save}>
+          <p className="fill-facts">
+            交付商 {project.deliverer || '—'}{project.tiers?.length ? ` · ${project.tiers.map((tier) => `${tier.name} ${tier.price} 元/次 × ${tier.times} 次`).join('；')}` : ''}
+          </p>
+          <div className="fill-fields">
+            <label>
+              产品编码（集团产品编码）
+              <input inputMode="numeric" maxLength={40} value={form.product_code} disabled={busy} placeholder="只填数字，如 2705404918972" onChange={set('product_code')} />
+            </label>
+            <label>
+              产品账户
+              <input maxLength={60} value={form.product_account} disabled={busy} onChange={set('product_account')} />
+            </label>
+            <label>
+              下游单位
+              <select value={form.downstream_kind} disabled={busy} onChange={set('downstream_kind')}>
+                <option value="">未填写</option>
+                {Object.entries(kinds).map(([key, label]) => <option key={key} value={key}>{key === 'other' ? '其他单位（填写名称）' : label}</option>)}
+              </select>
+            </label>
+            {form.downstream_kind === 'other' && (
+              <label>
+                下游单位名称
+                <input required maxLength={200} value={form.downstream_name} disabled={busy} onChange={set('downstream_name')} />
+              </label>
+            )}
+          </div>
+          {error && <p className="fill-error" role="alert">{error}</p>}
+          <div className="fill-actions">
+            {done && <span className="fill-done" role="status"><Check size={15} /> {done}</span>}
+            <button type="submit" className="primary" disabled={busy || !dirty}>{busy ? '正在保存…' : '保存'}</button>
+          </div>
+        </form>
+      )}
+    </li>
+  );
+}
+
 function ForecastCard({ forecast, token, onSaved }) {
   const [open, setOpen] = useState(false);
   const [note, setNote] = useState('');
@@ -295,6 +376,10 @@ export default function FillPage({ token }) {
 
   const replaceLine = (line) => setState((current) => ({ ...current, data: { ...current.data, lines: current.data.lines.map((item) => (item.id === line.id ? line : item)) } }));
   const replaceForecast = (forecast) => setState((current) => ({ ...current, data: { ...current.data, forecasts: current.data.forecasts.map((item) => (item.id === forecast.id ? forecast : item)) } }));
+  // A project filled in stays on the page until it is reopened, so the person sees it saved.
+  const replaceExtension = (row) => setState((current) => ({ ...current, data: { ...current.data, extensions: current.data.extensions.map((item) => (item.id === row.id ? row : item)) } }));
+  const extensions = data.extensions || [];
+  const pendingExtensions = extensions.filter((item) => item.missing.length).length;
 
   return (
     <main className="fill-page">
@@ -309,7 +394,7 @@ export default function FillPage({ token }) {
         <nav className="sub-tabs fill-tabs" aria-label="填报内容">
           {data.scopes.map((scope) => (
             <button key={scope} type="button" className={tab === scope ? 'active' : undefined} aria-current={tab === scope ? 'page' : undefined} onClick={() => setTab(scope)}>
-              {data.scopeLabels[scope]}{scope === 'ledger' ? ` ${data.lines.length}` : scope === 'progress' ? ` ${data.forecasts.length}` : ''}
+              {data.scopeLabels[scope]}{scope === 'ledger' ? ` ${data.lines.length}` : scope === 'progress' ? ` ${data.forecasts.length}` : scope === 'extension' ? ` ${pendingExtensions}` : ''}
             </button>
           ))}
         </nav>
@@ -335,6 +420,17 @@ export default function FillPage({ token }) {
             {data.forecasts.map((forecast) => <ForecastCard key={forecast.id} forecast={forecast} token={token} onSaved={replaceForecast} />)}
           </ul>
           {!data.forecasts.length && <p className="fill-empty">你名下目前没有登记的商机{data.scopes.includes('report') ? '，可以在“商机上报”里登记' : ''}</p>}
+        </section>
+      )}
+
+      {tab === 'extension' && (
+        <section aria-label="专线延伸补充信息">
+          <h2>专线延伸补充信息 <span>{pendingExtensions} 个待填</span></h2>
+          <p className="fill-facts">已经建档的专线延伸项目，请补上产品编码（集团产品编码的数字）、产品账户和下游单位。填全的项目下次打开时不再列出。</p>
+          <ul className="fill-list">
+            {extensions.map((project) => <ExtensionCard key={project.id} project={project} kinds={data.downstreamKinds || {}} token={token} onSaved={replaceExtension} />)}
+          </ul>
+          {!extensions.length && <p className="fill-empty">你名下的专线延伸项目都已填全</p>}
         </section>
       )}
 

@@ -67,7 +67,6 @@ export default function ImportRecords({ refreshToken, onOpenLine, focus = null, 
       {tabs}
       <div className="page-heading">
         <h2>导入记录</h2>
-        <p>台账 Excel 的每次导入；点击一条记录查看这次改了什么，以及逐行处理结果。</p>
       </div>
 
       <section className="table-shell">

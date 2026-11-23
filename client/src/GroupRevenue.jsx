@@ -45,14 +45,12 @@ export function Loader() {
 export function Metric({ label, value, note, className = '' }) {
   return <div className={`rev-metric ${className}`}><span>{label}</span><strong>{value}</strong>{note && <small>{note}</small>}</div>;
 }
-// What the ARPU figure is, in one line, wherever it is shown.
-export const arpuRule = '专线 ARPU = 当月报表专线收入 ÷ 当月月底在用专线数（正常在用、停机执行中、停机）。月底专线数按台账现在的开始时间和状态时间推算，跟随 KPI统计模式。';
 export const arpuNote = (row) => (row.arpu == null ? (row.monthEndLineCount > 0 ? null : '月底无在用专线') : `ARPU ${format(row.arpu)}`);
 
 function Metrics({ data }) {
   return <section className="rev-metrics rev-metrics-five" aria-label="收入概览">
-    <Metric label="集团信息化收入" value={format(data.totalRevenue)} note={`报表 ${format(data.reportRevenue ?? data.totalRevenue)} · 补录 ${format(data.supplementRevenue ?? 0)}`} />
-    <Metric label="报表专线收入" value={format(data.lineRevenue)} note="报表专线分类" />
+    <Metric label="集团信息化收入" value={format(data.totalRevenue)} note={`报表 ${format(data.reportRevenue ?? data.totalRevenue)} · 补录 ${format(data.supplementRevenue ?? 0)}${data.extensionRevenue ? ` · 延伸服务 ${format(data.extensionRevenue)}` : ''}`} />
+    <Metric label="专线收入" value={format(data.lineRevenue)} note={data.extensionRevenue ? `报表专线分类 + 延伸服务 ${format(data.extensionRevenue)}` : '报表专线分类'} />
     <Metric label="专线 ARPU" value={format(data.arpu)} note={data.monthEndLineCount > 0 ? `专线收入 ÷ 月底在用专线 ${data.monthEndLineCount} 条` : '月底没有在用专线，无法计算'} />
     <Metric label="专线收入占比" value={percent(data.lineShare ?? (data.totalRevenue > 0 ? data.lineRevenue / data.totalRevenue : null))} note="集团全部产品收入为分母" />
     <Metric label="较上月变化" value={signed(data.change)} className={tone(data.change)} note={data.previousRevenue == null ? '上月无可比较记录' : `上月 ${format(data.previousRevenue)} · ${data.previousRevenue <= 0 ? '非正基期' : percent(data.changeRate)}`} />
@@ -91,7 +89,7 @@ const trendSeries = [{ key: 'total', label: '集团收入' }, { key: 'line', lab
 // Month by month, the shared chart style; values stay printed at the right of each month.
 function Trend({ rows }) {
   return <section className="rev-trend" aria-label="月度收入趋势">
-    <div className="rev-section-heading"><h3>收入趋势</h3><span className="rev-caption">每月下方为当月专线 ARPU</span></div>
+    <div className="rev-section-heading"><h3>收入趋势</h3></div>
     <GroupedBars label="月度集团收入与专线收入" series={trendSeries} format={format} rows={rows.map((row, index) => ({
       key: `${row.month}-${row.managerName || ''}-${index}`,
       label: row.month,
@@ -99,7 +97,6 @@ function Trend({ rows }) {
       note: arpuNote(row),
       values: { total: row.totalRevenue, line: row.lineRevenue }
     }))} />
-    <p className="rev-arpu-rule">{arpuRule}</p>
   </section>;
 }
 
@@ -191,21 +188,28 @@ function GroupDetail({ data, month, onOpenLine, onRefresh, onOpenGroup }) {
   const reconciled = data.reconciliation;
   return <>
     <div className="rev-group-heading"><div><span className="rev-eyebrow">{onOpenGroup ? <button type="button" className="group-link" title="查看集团档案" onClick={() => onOpenGroup(data.group.groupCode)}>{data.group.groupCode} · 集团档案</button> : data.group.groupCode}</span><h2>{data.group.groupName}</h2><p>{data.group.managerName || '本月无报表归属'} · {month}</p></div><span className="rev-label">当前在用台账 {data.group.currentLineCount} 条</span></div>
-    {!data.group.hasReport && <Notice>该集团在本月没有报表记录，收入不按零计算。</Notice>}
+    {!data.group.hasReport && <Notice>{data.group.extensionRevenue ? '该集团在本月没有报表记录，本月收入只有专线延伸台账的延伸服务。' : '该集团在本月没有报表记录，收入不按零计算。'}</Notice>}
     {data.group.managerChanged && <Notice>客户经理归属已从 {data.group.previousManagerName || '未填写'} 变更为 {data.group.managerName}。</Notice>}
     <Metrics data={data.group} /><Trend rows={data.trend} />
-    <section className="rev-section"><div className="rev-section-heading"><h3>产品收入</h3><span className="rev-caption">信息化收入 · 原表金额单位</span></div>
+    <section className="rev-section"><div className="rev-section-heading"><h3>产品收入</h3></div>
       <DataTable rows={data.products} rowKey={(row) => JSON.stringify([row.productId, row.productName, row.category])} initialSort="revenue" columns={[
         { key: 'productName', label: '产品名称', render: (row) => <div className="rev-cell-stack"><strong>{row.productName || '未填写'}</strong><small>{row.productId}</small></div> }, { key: 'category', label: '收入分类' },
-        { key: 'revenue', label: '本月收入', numeric: true, render: (row) => format(row.revenue) }, { key: 'previousRevenue', label: '上月收入', numeric: true, render: (row) => format(row.previousRevenue) },
+        { key: 'revenue', label: '本月收入', numeric: true, render: (row) => row.extensionRevenue ? <div className="rev-cell-stack"><span>{format(row.revenue)}</span><small>含延伸服务 {format(row.extensionRevenue)}</small></div> : format(row.revenue) }, { key: 'previousRevenue', label: '上月收入', numeric: true, render: (row) => format(row.previousRevenue) },
         { key: 'change', label: '变化金额', numeric: true, render: (row) => <span className={tone(row.change)}>{signed(row.change)}</span> }, { key: 'changeRate', label: '环比', numeric: true, render: (row) => percent(row.changeRate) }
       ]} />
     </section>
     <section className="rev-section"><div className="rev-section-heading"><h3>收入核对</h3><span className="rev-label rev-warning">核对条件不足</span></div>
-      <div className="rev-reconcile-grid"><Metric label="报表专线收入" value={format(reconciled.reportLineRevenue)} /><Metric label="台账预计含税出账" value={format(reconciled.grossEstimate)} /><Metric label="台账预计信息化收入" value={format(reconciled.netEstimate)} /><Metric label="已核验服务税后收入" value={format(reconciled.serviceNet)} /><Metric label="参考差额" value={format(reconciled.referenceDifference)} note="当前台账推算 · 非准确对账" /></div>
+      <div className="rev-reconcile-grid"><Metric label="专线收入" value={format(reconciled.reportLineRevenue)} /><Metric label="台账预计含税出账" value={format(reconciled.grossEstimate)} /><Metric label="台账预计信息化收入" value={format(reconciled.netEstimate)} /><Metric label="已核验服务税后收入" value={format(reconciled.serviceNet)} note={reconciled.extensionNet ? `另有延伸台账 ${format(reconciled.extensionNet)}` : undefined} /><Metric label="参考差额" value={format(reconciled.referenceDifference)} note="当前台账推算 · 非准确对账" /></div>
       <ul className="rev-notes">{reconciled.messages.map((message, index) => <li key={index}>{message}</li>)}</ul>
     </section>
-    <section className="rev-section"><div className="rev-section-heading"><h3>专线延伸服务 <span>{data.services.length}</span></h3><button onClick={() => setEditing({})} disabled={!data.group.hasReport}><Plus size={16} />登记服务</button></div>
+    <section className="rev-section"><div className="rev-section-heading"><h3>专线延伸服务 <span>{data.services.length + (data.extensions?.length ?? 0)}</span></h3><button onClick={() => setEditing({})} disabled={!data.group.hasReport}><Plus size={16} />登记服务</button></div>
+      {data.extensions?.length > 0 && <>
+        <DataTable rows={data.extensions} rowKey="id" columns={[
+          { key: 'lineType', label: '专线类型', render: (row) => row.lineType || '未选择' }, { key: 'grossAmount', label: '出账金额（含税）', numeric: true, render: (row) => format(row.grossAmount) },
+          { key: 'revenue', label: '信息化收入 · 6%', numeric: true, render: (row) => format(row.revenue) },
+          { key: 'inReport', label: '计入情况', render: (row) => row.inReport ? '报表已有延伸服务收入，以报表为准' : '已计入专线收入' }
+        ]} />
+      </>}
       {error && <Notice error>{error}</Notice>}
       {editing && <ServiceForm key={editing.id || 'new'} service={editing.id ? editing : null} groupCode={data.group.groupCode} month={month} rows={data.sourceRows} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); onRefresh(); }} />}
       {deleting && <Notice><p>删除“{deleting.name}”的登记？已确认的补录收入将从合计中移除。</p><div className="rev-actions"><button className="rev-danger" disabled={busy} onClick={remove}>确认删除</button><button disabled={busy} onClick={() => setDeleting(null)}>取消</button></div></Notice>}
@@ -294,9 +298,9 @@ export default function GroupRevenue({ ref, onExportReady, kpiMode, defaultManag
       setError('');
       try {
         const XLSX = await import('xlsx');
-        const incomeFields = [['totalRevenue', '集团信息化收入'], ['lineRevenue', '报表专线收入'], ['lineShare', '专线占比'], ['monthEndLineCount', '月底在用专线数'], ['arpu', '专线ARPU'], ['previousRevenue', '上月收入'], ['change', '变化金额'], ['changeRate', '环比']];
+        const incomeFields = [['totalRevenue', '集团信息化收入'], ['lineRevenue', '专线收入（含延伸服务）'], ['extensionRevenue', '其中延伸服务'], ['lineShare', '专线占比'], ['monthEndLineCount', '月底在用专线数'], ['arpu', '专线ARPU'], ['previousRevenue', '上月收入'], ['change', '变化金额'], ['changeRate', '环比']];
         const fields = group
-          ? [['productId', '产品大类ID'], ['productName', '产品名称'], ['category', '收入分类'], ['revenue', '本月收入'], ...incomeFields.slice(5)]
+          ? [['productId', '产品大类ID'], ['productName', '产品名称'], ['category', '收入分类'], ['revenue', '本月收入'], ['extensionRevenue', '其中延伸服务'], ...incomeFields.slice(6)]
           : view === 'history'
             ? [['fileName', '文件名称'], ['months', '收入月份'], ['rowCount', '明细行数'], ['status', '批次状态'], ['activeMonths', '当前有效月份'], ['createdBy', '操作人'], ['createdAt', '导入时间']]
             : view === 'groups'
@@ -307,7 +311,7 @@ export default function GroupRevenue({ ref, onExportReady, kpiMode, defaultManag
         const sheet = XLSX.utils.json_to_sheet(rows);
         fields.forEach(([key], column) => {
           const format = ['lineShare', 'changeRate'].includes(key) ? '0.00%'
-            : ['totalRevenue', 'lineRevenue', 'arpu', 'supplementRevenue', 'previousRevenue', 'revenue', 'change'].includes(key) ? '#,##0.00' : null;
+            : ['totalRevenue', 'lineRevenue', 'extensionRevenue', 'arpu', 'supplementRevenue', 'previousRevenue', 'revenue', 'change'].includes(key) ? '#,##0.00' : null;
           if (!format) return;
           rows.forEach((_, index) => {
             const cell = sheet[XLSX.utils.encode_cell({ r: index + 1, c: column })];
@@ -345,7 +349,7 @@ export default function GroupRevenue({ ref, onExportReady, kpiMode, defaultManag
         { key: 'activeMonths', label: '当前有效月份' }, { key: 'createdBy', label: '操作人' }, { key: 'createdAt', label: '时间', render: (row) => date(row.createdAt) }
       ]} /></section> : data && <>
         <Metrics data={data.summary} /><Trend rows={data.trend} />
-        <section className="rev-section"><div className="rev-section-heading"><h3>{view === 'managers' ? '客户经理收入' : `${managers.find((item) => item.id === manager)?.name || '全部'}集团`} <span>{view === 'managers' ? data.managers.length : groups.length}</span></h3><span className="rev-caption">各月按报表归属统计</span></div>
+        <section className="rev-section"><div className="rev-section-heading"><h3>{view === 'managers' ? '客户经理收入' : `${managers.find((item) => item.id === manager)?.name || '全部'}集团`} <span>{view === 'managers' ? data.managers.length : groups.length}</span></h3></div>
           {view === 'groups' && <div className="rev-group-filters"><label className="rev-search"><Search size={16} /><input aria-label="搜索集团" placeholder="集团名称或集团编码" value={keyword} onChange={(event) => setKeyword(event.target.value)} /></label><select aria-label="集团状态筛选" value={filter} onChange={(event) => setFilter(event.target.value)}><option value="all">全部集团</option><option value="decline">收入下降</option><option value="unmatched">台账未匹配</option><option value="review">补录待复核</option></select></div>}
           {view === 'managers' ? <DataTable rows={data.managers} rowKey="id" initialSort="totalRevenue" columns={[
             { key: 'name', label: '客户经理', render: (row) => <button className="rev-link rev-cell-stack" onClick={() => { setManager(row.id); setView('groups'); }}><strong>{row.name}</strong><small>{row.id}</small></button> },

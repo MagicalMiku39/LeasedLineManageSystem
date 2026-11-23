@@ -1,7 +1,7 @@
 import React, { useEffect, useImperativeHandle, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, FileSpreadsheet, RefreshCw, Search, Upload, X } from 'lucide-react';
 import { apiBase, isAbort, jsonBody, requestJson } from './api.js';
-import { arpuNote, arpuRule, DataTable, Loader, Metric, Notice } from './GroupRevenue.jsx';
+import { arpuNote, DataTable, Loader, Metric, Notice } from './GroupRevenue.jsx';
 import { GroupedBars } from './charts.jsx';
 import { confidenceName } from './kpiRows.js';
 import Prospects from './Prospects.jsx';
@@ -149,7 +149,7 @@ function RevenueTrend({ code, revision }) {
   const rows = (state.data?.trend || []).filter((row) => row.totalRevenue != null || row.lineRevenue != null);
   return (
     <section className="rev-section">
-      <div className="rev-section-heading"><h3>收入</h3><span className="rev-caption">来自已导入的集团收入报表，税后 · 每月下方为当月专线 ARPU</span></div>
+      <div className="rev-section-heading"><h3>收入</h3></div>
       {state.loading ? <Loader /> : rows.length ? (
         <GroupedBars
           label="月度集团收入与专线收入"
@@ -158,7 +158,6 @@ function RevenueTrend({ code, revision }) {
           rows={rows.map((row) => ({ key: row.month, label: row.month, sublabel: row.managerName, note: arpuNote(row), values: { total: row.totalRevenue, line: row.lineRevenue } }))}
         />
       ) : <p className="group-empty">{state.error || '已导入的收入报表中没有这个集团'}</p>}
-      {rows.length > 0 && <p className="rev-arpu-rule">{arpuRule}</p>}
     </section>
   );
 }
@@ -216,7 +215,7 @@ function Profile({ data, code, revision, onOpenLine }) {
       )}
 
       <section className="rev-section">
-        <div className="rev-section-heading"><h3>专线 <span>{lines.length}</span></h3><span className="rev-caption">点击集团产品编码查看专线详情</span></div>
+        <div className="rev-section-heading"><h3>专线 <span>{lines.length}</span></h3></div>
         {lines.length ? (
           <>
             <div className="group-tallies">
@@ -240,7 +239,7 @@ function Profile({ data, code, revision, onOpenLine }) {
       </section>
 
       <section className="rev-section">
-        <div className="rev-section-heading"><h3>欠费销户风险 <span>{warnings.length}</span></h3><span className="rev-caption">停机且有欠费的专线，截至 {data.warningsAsOf}</span></div>
+        <div className="rev-section-heading"><h3>欠费销户风险 <span>{warnings.length}</span></h3><span className="rev-caption">截至 {data.warningsAsOf}</span></div>
         {warnings.length ? (
           <DataTable rows={warnings} rowKey="id" initialSort="stopped_days" columns={[
             { key: 'group_product_code', label: '集团产品编码', render: (row) => <button className="rev-link" onClick={() => onOpenLine(row.id)}>{row.group_product_code || `记录 ${row.id}`}</button> },
@@ -272,7 +271,7 @@ function Profile({ data, code, revision, onOpenLine }) {
       </section>
 
       <section className="rev-section">
-        <div className="rev-section-heading"><h3>最近导入变化 <span>{changes.length}</span></h3><span className="rev-caption">各次台账导入中这个集团专线的变化，最多显示 30 条</span></div>
+        <div className="rev-section-heading"><h3>最近导入变化 <span>{changes.length}</span></h3></div>
         {changes.length ? (
           <DataTable rows={changes} rowKey="id" initialSort="id" columns={[
             { key: 'id', label: '时间', render: (row) => beijingTime(row.created_at) },
@@ -412,7 +411,7 @@ export default function Groups({ ref, kpiMode, refreshToken, onOpenLine, focus, 
           <section className="rev-section">
             <div className="rev-section-heading">
               <h3>集团 <span>{count(data.total)}</span></h3>
-              <span className="rev-caption">点击集团查看档案 · 有在用专线的排在前面{data.arpuMonth ? ` · 专线 ARPU 为 ${data.arpuMonth} 的数` : ''}</span>
+              {data.arpuMonth && <span className="rev-caption">专线 ARPU：{data.arpuMonth}</span>}
             </div>
             <div className="rev-group-filters group-filters">
               <label className="rev-search"><Search size={16} /><input aria-label="搜索集团" placeholder="集团名称、集团编码或客户经理" value={typed} onChange={(event) => setTyped(event.target.value)} /></label>

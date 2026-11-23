@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS leased_line (
   project_name TEXT,
   ledger_status TEXT,
   remark TEXT,
+  ipv4_address TEXT,
+  ipv6_address TEXT,
   import_batch_id TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP

@@ -245,8 +245,10 @@ export function createWarningMailRouter({ db, leasedLineSource, currentUser, sto
     let body = report.body;
     if (req.body?.withLink === true && fillLinks) {
       const origin = String(req.body?.origin ?? '');
+      // A manager with 延伸 projects still to fill in gets that on the same link.
+      const extra = fillLinks.extraScopes?.(report.manager) ?? [];
       const made = /^https?:\/\/[^/\s]+$/.test(origin)
-        ? fillLinks.create({ manager: report.manager, scopes: digestLinkScopes, days: digestLinkDays, note: '' }, delivery.actor)
+        ? fillLinks.create({ manager: report.manager, scopes: [...digestLinkScopes, ...extra], days: digestLinkDays, note: '' }, delivery.actor)
         : { error: '系统地址不正确' };
       if (made.error) {
         db.prepare("UPDATE warning_mail_digest SET status = 'preview' WHERE id = ?").run(delivery.id);
@@ -256,7 +258,7 @@ export function createWarningMailRouter({ db, leasedLineSource, currentUser, sto
       body = [
         report.body,
         '',
-        `如需补充台账信息或更新商机进度，可直接打开您的专属填报链接（${digestLinkDays} 天内有效，无需登录，只显示您名下的内容）：`,
+        `如需补充台账信息或更新商机进度${extra.length ? '，或补充专线延伸项目的产品编码、产品账户和下游单位' : ''}，可直接打开您的专属填报链接（${digestLinkDays} 天内有效，无需登录，只显示您名下的内容）：`,
         `${fillLinks.base(origin)}/fill/${made.token}`,
         '拿到链接的人都能填写，请不要转发；需要在能打开专线台账管理系统的网络内使用。'
       ].join('\n');

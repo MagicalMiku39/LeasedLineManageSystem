@@ -12,12 +12,15 @@ const kindOptions = [
 ];
 const emptyDraft = {
   group_code: '', group_name: '', manager_name: '', contract_amount: '', billing_amount: '', presale_amount: '',
-  discount: '', profit_rate: '', deliverer: '', tiers: [], product_code: '', product_account: '', downstream_kind: '', downstream_name: '', remark: ''
+  discount: '', profit_rate: '', deliverer: '', tiers: [], product_code: '', product_account: '', downstream_kind: '', downstream_name: '', remark: '',
+  line_type: '', billing_month: ''
 };
+const lineTypeOptions = ['数据专线', '互联网专线'];
 const fieldLabels = {
   group_code: '集团编码', group_name: '集团名称', manager_name: '客户经理', deliverer: '交付商',
   contract_amount: '合同金额', billing_amount: '出账金额', presale_amount: '售前确认书金额', discount: '折扣', profit_rate: '移动侧利润',
-  product_code: '产品编码', product_account: '产品账户', downstream_kind: '下游单位', downstream_name: '下游单位名称', tiers: '订购档次', remark: '备注', record: '整条记录'
+  product_code: '产品编码', product_account: '产品账户', downstream_kind: '下游单位', downstream_name: '下游单位名称', tiers: '订购档次', remark: '备注', record: '整条记录',
+  line_type: '专线类型', billing_month: '出账月份'
 };
 const sourceLabels = { mail: '邮件', paste: '粘贴正文', manual: '手动' };
 const yuan = (value) => (value === null || value === undefined || value === '' ? '—' : money(value));
@@ -56,6 +59,20 @@ function RecordForm({ form, setForm, disabled }) {
         {field('deliverer', { placeholder: '例如 铁通' })}
         {field('discount', { numeric: true, unit: '%' })}
         {field('profit_rate', { numeric: true, unit: '%' })}
+        <label>
+          专线类型
+          <select value={form.line_type} disabled={disabled} onChange={set('line_type')}>
+            <option value="">请选择</option>
+            {lineTypeOptions.map((type) => <option key={type} value={type}>{type}</option>)}
+          </select>
+        </label>
+        <label>
+          出账月份
+          <input type="month" value={form.billing_month} disabled={disabled} onChange={set('billing_month')} />
+        </label>
+        <p className="subtle ext-note kpi-edit-wide">
+          出账金额在出账月份一次性出完，除税（6%）后计入该集团当月的{form.line_type || '专线'}收入{form.billing_amount !== '' && Number.isFinite(Number(form.billing_amount)) ? `：${money(Number(form.billing_amount) / 1.06)} 元` : ''}。
+        </p>
       </div>
       <div className="ext-tiers">
         <div className="ext-tiers-head">
@@ -420,7 +437,6 @@ export default function ExtensionLedger({ ref, refreshToken, tabs }) {
       <section className="operations-heading">
         <div>
           <h2>专线延伸台账</h2>
-          <p className="operations-rule">从专线延伸建档邮件录入：集团、客户经理、金额、档次和交付商从邮件中识别，核对后保存；产品编码、产品账户和下游单位之后补充。点顶部“邮件录入”或“录入项目”按钮开始。</p>
         </div>
         <button type="button" className="primary" onClick={() => setImporting(true)}><Mail size={16} /> 录入项目</button>
       </section>
@@ -442,7 +458,7 @@ export default function ExtensionLedger({ ref, refreshToken, tabs }) {
       </div>
       <div className="operations-table-wrap">
         <table className="warning-table ext-table">
-          <thead><tr><th>集团</th><th>客户经理</th><th className="num">合同 / 出账</th><th className="num">售前确认书</th><th>交付商 · 档次</th><th>产品编码 / 账户</th><th>下游单位</th><th>录入</th><th className="operations-actions-cell">操作</th></tr></thead>
+          <thead><tr><th>集团</th><th>客户经理</th><th className="num">合同 / 出账</th><th className="num">售前确认书</th><th>出账月份 · 收入</th><th>交付商 · 档次</th><th>产品编码 / 账户</th><th>下游单位</th><th>录入</th><th className="operations-actions-cell">操作</th></tr></thead>
           <tbody>
             {rows.map((row) => (
               <tr key={row.id}>
@@ -450,7 +466,13 @@ export default function ExtensionLedger({ ref, refreshToken, tabs }) {
                 <td>{row.manager_name || '—'}</td>
                 <td className="num operations-stack-cell">{yuan(row.contract_amount)}<small>出账 {yuan(row.billing_amount)}</small></td>
                 <td className="num">{yuan(row.presale_amount)}</td>
-                <td className="operations-stack-cell ext-wrap">{row.deliverer || '—'}<small>{row.tiers.length ? row.tiers.map((tier) => `${tier.name.replace(/^数据专线延伸服务/, '')} ${tier.price}×${tier.times}`).join('，') : '无档次'}</small></td>
+                <td className="operations-stack-cell ext-wrap">
+                  {row.billing_month || '—'}{row.line_type ? ` · ${row.line_type}` : ''}
+                  <small className={row.revenue?.state === 'counted' ? undefined : 'ext-missing'}>
+                    {row.revenue?.revenue == null ? '' : `收入 ${money(row.revenue.revenue)} · `}{row.revenue?.text}
+                  </small>
+                </td>
+                <td className="operations-stack-cell ext-wrap">{row.deliverer || '—'}<small>{row.tiers.length ? row.tiers.map((tier) => `${tier.name.replace(/^(?:数据|互联网)专线延伸服务/, '')} ${tier.price}×${tier.times}`).join('，') : '无档次'}</small></td>
                 <td className="operations-stack-cell">{row.product_code || <span className="ext-missing">待填写</span>}<small>{row.product_account || '账户待填写'}</small></td>
                 <td>{row.downstream || <span className="ext-missing">待填写</span>}</td>
                 <td className="operations-stack-cell">{sourceLabels[row.source]}<small>{beijingTime(row.created_at).slice(0, 10)}</small></td>
@@ -464,7 +486,7 @@ export default function ExtensionLedger({ ref, refreshToken, tabs }) {
                 </td>
               </tr>
             ))}
-            {!rows.length && <tr><td colSpan="9" className="empty">{state.loading ? '正在加载…' : data?.rows.length ? '没有符合条件的项目' : '还没有专线延伸项目，点“录入项目”从邮件录入'}</td></tr>}
+            {!rows.length && <tr><td colSpan="10" className="empty">{state.loading ? '正在加载…' : data?.rows.length ? '没有符合条件的项目' : '还没有专线延伸项目，点“录入项目”从邮件录入'}</td></tr>}
           </tbody>
         </table>
       </div>

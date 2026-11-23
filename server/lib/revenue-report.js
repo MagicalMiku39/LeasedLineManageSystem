@@ -1,5 +1,6 @@
 import { billableStatuses, cancelledStatuses } from './ledger-rules.js';
 import { addCents, comparison, fail, money, netCents, previousMonth, productTaxRate, safeCents, share, toCents, validMonth } from './revenue-money.js';
+import { extensionRevenueRows, reportedExtensionPairs } from './extension-revenue.js';
 
 const status = (line) => line.product_status_name ?? line.ledger_status ?? '';
 const sum = (rows, key) => rows.reduce((total, row) => addCents(total, row[key]), 0);
@@ -90,7 +91,31 @@ export function createRevenueQueries({ db, leasedLineSource }) {
         group.supplementCents = addCents(group.supplementCents, service.netCents);
       }
     }
-    for (const group of aggregates) group.totalCents = addCents(group.reportCents, group.supplementCents);
+    // 专线延伸服务 from 专线延伸台账: billed in full in its month, counted as that group's 专线收入
+    // (6% tax off). A group whose report already has a 延伸服务 row that month keeps the report's figure.
+    const reportedExtensions = reportedExtensionPairs(db, months.map((item) => item.month));
+    const extensions = extensionRevenueRows(db, months.map((item) => item.month)).map((item) => ({
+      ...item, inReport: reportedExtensions.has(`${item.month}|${item.groupCode}`)
+    }));
+    for (const group of aggregates) group.extensionCents = 0;
+    for (const item of extensions) {
+      if (item.inReport) continue;
+      const key = JSON.stringify([item.month, item.groupCode]);
+      let group = indexed.get(key);
+      if (!group) {
+        // A group with no report rows that month still has this revenue; it takes its manager from its other months.
+        const other = aggregates.filter((row) => row.groupCode === item.groupCode && !row.extensionOnly).sort((a, b) => b.month.localeCompare(a.month))[0];
+        // Never in the report: the manager named on the project, matched to the report's id for that name.
+        const sameName = other ? null : aggregates.find((row) => !row.extensionOnly && item.managerName && row.managerName === item.managerName);
+        group = { month: item.month, groupCode: item.groupCode, groupName: other?.groupName ?? item.groupName, managerId: other?.managerId ?? sameName?.managerId ?? null,
+          managerName: other?.managerName ?? item.managerName, reportCents: 0, lineCents: 0, supplementCents: 0, needsReviewCount: 0, extensionCents: 0, extensionOnly: true };
+        aggregates.push(group);
+        indexed.set(key, group);
+      }
+      group.extensionCents = addCents(group.extensionCents, item.netCents);
+      group.lineCents = addCents(group.lineCents, item.netCents);
+    }
+    for (const group of aggregates) group.totalCents = addCents(group.reportCents, group.supplementCents, group.extensionCents);
     const lineCounts = new Map(db.prepare(`SELECT group_code, COUNT(*) AS total,
       SUM(CASE WHEN COALESCE(product_status_name, ledger_status, '') = '正常在用' THEN 1 ELSE 0 END) AS active
       FROM ${leasedLineSource(query)} GROUP BY group_code`).all().map((row) => [row.group_code, row]));
@@ -112,17 +137,17 @@ export function createRevenueQueries({ db, leasedLineSource }) {
       const lineCount = rows.reduce((total, row) => total + linesAt(period, row.groupCode), 0);
       return { monthEndLineCount: lineCount, arpu: rows.length ? arpuOf(sum(rows, 'lineCents'), lineCount) : null };
     };
-    return { months, month, batches, services, aggregates, indexed, lineCounts, matchedGroups, linesAt, arpuFor };
+    return { months, month, batches, services, extensions, aggregates, indexed, lineCounts, matchedGroups, linesAt, arpuFor };
   }
 
   function groupView(group, ctx, month) {
     const before = ctx.indexed.get(JSON.stringify([previousMonth(month), group.groupCode]));
     return { groupCode: group.groupCode, groupName: group.groupName, managerId: group.managerId, managerName: group.managerName,
       reportRevenue: money(group.reportCents), totalRevenue: money(group.totalCents), lineRevenue: money(group.lineCents),
-      supplementRevenue: money(group.supplementCents), lineShare: share(group.lineCents, group.totalCents),
+      supplementRevenue: money(group.supplementCents), extensionRevenue: money(group.extensionCents), lineShare: share(group.lineCents, group.totalCents),
       ...ctx.arpuFor([group], month),
       currentLineCount: ctx.lineCounts.get(group.groupCode)?.active ?? 0, currentTotalLineCount: ctx.lineCounts.get(group.groupCode)?.total ?? 0,
-      matched: ctx.matchedGroups.has(group.groupCode), needsReviewCount: group.needsReviewCount, hasReport: true,
+      matched: ctx.matchedGroups.has(group.groupCode), needsReviewCount: group.needsReviewCount, hasReport: !group.extensionOnly,
       managerChanged: Boolean(before && before.managerId !== group.managerId), previousManagerName: before?.managerName ?? null,
       ...comparison(group.totalCents, before?.totalCents ?? null) };
   }
@@ -130,7 +155,7 @@ export function createRevenueQueries({ db, leasedLineSource }) {
   function summary(query = {}) {
     const ctx = context(query);
     const { month } = ctx;
-    if (!month) return { month: null, previousMonth: null, summary: { totalRevenue: null, lineRevenue: null, supplementRevenue: 0,
+    if (!month) return { month: null, previousMonth: null, summary: { totalRevenue: null, lineRevenue: null, supplementRevenue: 0, extensionRevenue: 0,
       groupCount: 0, ungroupedRevenue: 0, previousRevenue: null, change: null, changeRate: null }, managers: [], groups: [], trend: [] };
     const selected = String(query.managers ?? '').split('|').filter(Boolean);
     const keyword = String(query.keyword ?? '').trim().toLocaleLowerCase();
@@ -147,7 +172,7 @@ export function createRevenueQueries({ db, leasedLineSource }) {
       const older = prior.filter((row) => row.managerId === id);
       const value = sum(rows, 'totalCents'), line = sum(rows, 'lineCents');
       return { id, name: rows[0].managerName || '未填写客户经理', groupCount: rows.length,
-        totalRevenue: money(value), lineRevenue: money(line), supplementRevenue: money(sum(rows, 'supplementCents')),
+        totalRevenue: money(value), lineRevenue: money(line), supplementRevenue: money(sum(rows, 'supplementCents')), extensionRevenue: money(sum(rows, 'extensionCents')),
         lineShare: share(line, value), ...ctx.arpuFor(rows, month), ...comparison(value, nullableSum(older, 'totalCents')) };
     });
     const ungrouped = db.prepare(`SELECT COALESCE(SUM(json_extract(r.data_json, '$.revenue')),0) AS total FROM revenue_source_row r
@@ -156,7 +181,7 @@ export function createRevenueQueries({ db, leasedLineSource }) {
     return { month, previousMonth: priorMonth,
       summary: { totalRevenue: money(total), reportRevenue: ctx.batches.has(month) ? money(sum(current, 'reportCents')) : null,
         lineRevenue: ctx.batches.has(month) ? money(sum(current, 'lineCents')) : null,
-        supplementRevenue: money(sum(current, 'supplementCents')), groupCount: current.length,
+        supplementRevenue: money(sum(current, 'supplementCents')), extensionRevenue: money(sum(current, 'extensionCents')), groupCount: current.length,
         ...ctx.arpuFor(current, month),
         ungroupedRevenue: money(ungrouped), ungroupedScope: '全报表', ...comparison(total, previous) },
       managers, groups: current.map((row) => groupView(row, ctx, month)),
@@ -175,7 +200,7 @@ export function createRevenueQueries({ db, leasedLineSource }) {
     const current = ctx.indexed.get(JSON.stringify([month, code]));
     const group = current ? groupView(current, ctx, month) : { groupCode: code, groupName: history.at(-1).groupName,
       managerName: null, managerId: null, hasReport: false, totalRevenue: null, lineRevenue: null, reportRevenue: null,
-      supplementRevenue: 0, lineShare: null, previousRevenue: null, change: null, changeRate: null,
+      supplementRevenue: 0, extensionRevenue: 0, lineShare: null, previousRevenue: null, change: null, changeRate: null,
       monthEndLineCount: ctx.linesAt(month, code), arpu: null,
       currentLineCount: ctx.lineCounts.get(code)?.active ?? 0, matched: ctx.matchedGroups.has(code) };
     const getRows = (period) => db.prepare(`SELECT r.id, r.data_json FROM revenue_source_row r
@@ -193,10 +218,23 @@ export function createRevenueQueries({ db, leasedLineSource }) {
       }
       return result;
     };
-    const thisProducts = productsByKey(rows), oldProducts = productsByKey(oldRows);
+    // 延伸服务 counts under the line product it belongs to (数据专线 / 互联网专线), as part of that product's revenue.
+    const extensionsOf = (period) => ctx.extensions.filter((item) => item.groupCode === code && item.month === period && !item.inReport);
+    const withExtensions = (products, period) => {
+      for (const item of extensionsOf(period)) {
+        const name = item.lineType || '专线延伸服务';
+        let key = [...products.keys()].find((candidate) => { const entry = products.get(candidate); return entry.productName === name && entry.category === '专线'; });
+        if (!key) { key = JSON.stringify(['', name, '专线']); products.set(key, { productId: '', productName: name, category: '专线', cents: 0 }); }
+        const entry = products.get(key);
+        entry.cents = addCents(entry.cents, item.netCents);
+        entry.extensionCents = addCents(entry.extensionCents ?? 0, item.netCents);
+      }
+      return products;
+    };
+    const thisProducts = withExtensions(productsByKey(rows), month), oldProducts = withExtensions(productsByKey(oldRows), previousMonth(month));
     const products = [...new Set([...thisProducts.keys(), ...oldProducts.keys()])].map((key) => {
       const item = thisProducts.get(key), before = oldProducts.get(key);
-      return { ...(item || before), revenue: money(item?.cents ?? null), ...comparison(item?.cents ?? null, before?.cents ?? null) };
+      return { ...(item || before), revenue: money(item?.cents ?? null), extensionRevenue: money(item?.extensionCents ?? null), ...comparison(item?.cents ?? null, before?.cents ?? null) };
     });
     const lines = db.prepare(`SELECT * FROM ${leasedLineSource(query)} WHERE group_code = ? ORDER BY group_product_code, id`).all(code);
     const estimates = lines.map((line) => estimateLine(line, month));
@@ -213,7 +251,7 @@ export function createRevenueQueries({ db, leasedLineSource }) {
     const outsideLineServices = includedServices.filter((service) => rows.some((row) => row.id === service.sourceRowId && row.category !== '专线'));
     const includedOutsideLineNet = sum(outsideLineServices, 'netCents');
     const referenceDifference = current && net !== null && !serviceScopeUnknown
-      ? addCents(current.lineCents, current.supplementCents, includedOutsideLineNet, -net, -serviceNet) : null;
+      ? addCents(current.lineCents, current.supplementCents, includedOutsideLineNet, -net, -serviceNet, -current.extensionCents) : null;
     const tolerance = db.prepare('SELECT tolerance_cents FROM revenue_settings WHERE id = 1').get().tolerance_cents;
     const messages = ['缺少所选月份的历史台账快照，以下金额为当前台账推算。',
       '报表专线与台账产品映射尚未核验，参考差额不代表准确对账结果。'];
@@ -233,9 +271,15 @@ export function createRevenueQueries({ db, leasedLineSource }) {
     if (services.some((service) => service.needsReview)) messages.push('报表已修订，已有延伸服务需重新核验是否包含。');
     if (serviceScopeUnknown) messages.push('已包含服务尚未关联报表源行，无法确定专线收入是否已覆盖该服务，参考差额暂不计算。');
     if (includedOutsideLineNet !== 0) messages.push(`核对时另计非专线报表分类中的已登记服务 ${money(includedOutsideLineNet)}；集团实际收入不重复增加。`);
+    const extensionNet = current?.extensionCents ?? 0;
+    if (extensionNet !== 0) messages.push(`专线收入含专线延伸台账的延伸服务 ${money(extensionNet).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} 元（出账金额除税 6%），核对差额时已扣除。`);
+    if (extensionNet !== 0 && confirmedServices.some((service) => service.coverage === 'excluded')) messages.push('本月同时有手动登记的“报表未包含”延伸服务，请确认没有和专线延伸台账重复计算。');
+    if (ctx.extensions.some((item) => item.groupCode === code && item.month === month && item.inReport)) messages.push('报表中已有延伸服务收入，专线延伸台账的同月项目以报表为准，不重复计入。');
     if (referenceDifference > tolerance) messages.push('参考收入高于台账推算；核验产品范围、调账和资费后，可检查是否存在尚未登记的专线延伸服务。');
     if (referenceDifference !== null && referenceDifference < -tolerance) messages.push('参考收入低于台账推算，请核验减免、调账、状态时间或资费变化。');
-    return { group, products, lines, services,
+    const extensions = ctx.extensions.filter((item) => item.groupCode === code && item.month === month)
+      .map((item) => ({ id: item.id, lineType: item.lineType, grossAmount: money(item.grossCents), revenue: money(item.netCents), inReport: item.inReport }));
+    return { group, products, lines, services, extensions,
       trend: ctx.months.slice().reverse().map(({ month: period }) => {
         const row = ctx.indexed.get(JSON.stringify([period, code]));
         return { month: period, totalRevenue: money(row?.totalCents ?? null), lineRevenue: money(row?.lineCents ?? null), managerName: row?.managerName ?? null,
@@ -244,7 +288,7 @@ export function createRevenueQueries({ db, leasedLineSource }) {
       sourceRows: rows.map((row) => ({ ...row, gross: money(row.gross), tax: money(row.tax), adjustment: money(row.adjustment),
         adjustmentTax: money(row.adjustmentTax), revenue: money(row.revenue) })),
       reconciliation: { status: 'insufficient', grossEstimate: money(gross), netEstimate: money(net),
-        reportLineRevenue: group.lineRevenue, serviceNet: money(serviceNet), difference: null,
+        reportLineRevenue: group.lineRevenue, serviceNet: money(serviceNet), extensionNet: money(extensionNet), difference: null,
         referenceDifference: money(referenceDifference), tolerance: money(tolerance), messages,
         taxMismatchCount, adjustment: money(adjustment), projectedServiceNet: money(sum(services.filter((service) => service.projected), 'netCents')) },
       audit: db.prepare(`SELECT action, actor, created_at AS createdAt, entity_id AS entityId FROM revenue_audit

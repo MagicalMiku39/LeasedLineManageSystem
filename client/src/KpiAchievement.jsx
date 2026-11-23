@@ -392,7 +392,7 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
         <div>
           <h2>KPI 达成</h2>
           <p className="operations-rule">
-            {data ? `${data.year} 年度目标为净增 ${target} 条专线。` : ''}净增 = 新增 − 销户，新增按开始时间、销户按状态时间，与台账年度统计口径一致，遵循 KPI 统计模式。{data ? `${dataFreshness(data.lastImportAt)}。` : ''}
+            {data ? `${data.year} 年度目标净增 ${target} 条 · ${dataFreshness(data.lastImportAt)}` : ''}
           </p>
         </div>
       </section>
@@ -493,7 +493,6 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
           <div className="kpi-trend">
             <h3>年度走势</h3>
             <KpiTrendChart monthly={data.monthly} currentMonth={currentMonth} target={target} forecastByMonth={forecast.byMonth} />
-            <p className="chart-note">按专线现在的开始时间、状态时间归到各月，与上面的年度净增同一口径；系统不保存每月当时的快照。</p>
             <details className="chart-table">
               <summary>查看每月数字</summary>
               <div className="table-scroll">
@@ -700,7 +699,6 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
             )}
           </div>
         )}
-        {filtering && <p className="operations-rule kpi-list-note">筛选只影响下面列表的显示，上方的统计数字不变。</p>}
         <div className="table-scroll kpi-table-scroll">
           <table className="data-table kpi-table">
             {forecastHead}
@@ -766,7 +764,6 @@ export default function KpiAchievement({ ref, kpiMode, refreshToken, onOpenGroup
           </>
         )}
         {suggestionTotal > 0 && <p className="kpi-suggestion-note" role="status">导入后发现可能对应预计任务的专线，点击带标记的任务确认。确认前不会改动任何数字。</p>}
-        <p className="operations-rule">预计年度净增 = 当前净增 + 预计新增 − 预计销户，只计尚未落地的条数。点击一行可以查看和更新进展；专线实际开通或销户、已体现在台账中后，请在进展里填写已落地条数。一条预计结束时点“归档”：已完结表示全部落地，未完结表示不会再落地并记下原因。归档后不再计入预计，可随时取消归档。</p>
       </section>
       {archiving && (
         <KpiArchive

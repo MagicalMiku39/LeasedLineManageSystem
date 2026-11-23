@@ -193,7 +193,6 @@ export default function Workbench({ ref, kpiMode, refreshToken, onNavigate }) {
           <section className="rev-section">
             <div className="rev-section-heading">
               <h3>战客异动 <span>{data.strategic.changes.length}</span></h3>
-              <span className="rev-caption">这次导入前后渗透状态不同的战客集团</span>
             </div>
             {latest ? <StrategicChanges strategic={data.strategic} onNavigate={onNavigate} /> : <p className="workbench-note">导入台账后在这里显示。</p>}
           </section>

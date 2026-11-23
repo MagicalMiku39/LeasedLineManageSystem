@@ -103,7 +103,7 @@ function ArrearsWarnings({ ref, kpiMode, refreshToken, onOpenLine, onOpenGroup }
   }
   return <>
     <section className="operations-heading">
-      <div><h2>欠费销户预警</h2><p className="operations-rule">停机且总欠费大于 0，按状态日期计算自然日差；满 180 天列为待销户。</p></div>
+      <div><h2>欠费销户预警</h2></div>
       <label>统计日期<input type="date" value={asOf} disabled={saving !== null} onChange={(event) => event.target.value && setAsOf(event.target.value)} /></label>
     </section>
     <section className="operations-summary" aria-label="预警概览">
@@ -116,7 +116,6 @@ function ArrearsWarnings({ ref, kpiMode, refreshToken, onOpenLine, onOpenGroup }
       <section className="operations-levels" aria-label="预警等级分布">
         <div className="operations-levels-head">
           <span>预警等级分布 · {unleveled.length} 条{mark === 'active' ? '（不含忽略）' : ''}</span>
-          <span className="operations-rule">点击一段只看该等级，再点一次取消</span>
         </div>
         <SegmentBar label="预警等级分布" segments={levelSegments} onSelect={toggleLevel} selected={level === 'all' ? undefined : level} />
         <SegmentLegend segments={levelSegments} onSelect={toggleLevel} selected={level === 'all' ? undefined : level} />
