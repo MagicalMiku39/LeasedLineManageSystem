@@ -396,10 +396,21 @@ button.group-link:hover { background: none; box-shadow: none; text-decoration: u
 .ext-history { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; line-height: 1.7; }
 .ext-mail-search { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
 .ext-mail-list { display: grid; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; max-height: 46dvh; overflow-y: auto; }
-.ext-mail-list button { display: grid; gap: 3px; width: 100%; height: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); box-shadow: none; text-align: left; white-space: normal; }
+.ext-mail-list li > button:first-child { display: grid; gap: 3px; width: 100%; height: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); box-shadow: none; text-align: left; white-space: normal; }
 .ext-mail-list strong { font-size: 13px; overflow-wrap: anywhere; }
 .ext-mail-list small { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .ext-mail-list .ext-snippet { color: #4a4a50; }
+.ext-mail-list li { display: grid; gap: 2px; }
+.ext-mail-list .ext-repeat { color: #a04e12; }
+.ext-mail-list .ext-mail-skip { justify-self: end; height: auto; padding: 2px 4px; font-size: 12px; }
+.ext-mail-handled > button:first-child { background: var(--surface-muted); }
+.ext-mail-handled strong { color: var(--muted); }
+.ext-mail-toggle { height: auto; margin-top: 8px; padding: 2px 0; font-size: 12px; }
+.ext-repeats { display: grid; gap: 6px; margin: 4px 0 10px; padding: 10px 12px; border-radius: var(--radius-sm); background: #fdf3e8; color: #7a3d0e; font-size: 13px; line-height: 1.6; }
+.ext-repeats p { margin: 0; }
+.ext-repeats .ext-check { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--ink); font-weight: 600; }
+.ext-repeats .ext-check input { flex: none; margin: 0; padding: 0; }
+.ext-repeats .text-button { justify-self: start; height: auto; padding: 0; font-size: 12px; }
 @media (max-width: 640px) {
   .ext-fields { grid-template-columns: minmax(0, 1fr); }
   .ext-tier { grid-template-columns: minmax(0, 1fr) 72px 56px 32px; }

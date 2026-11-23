@@ -105,25 +105,44 @@ const payload = (form) => ({
 function ImportDialog({ onClose, onSaved }) {
   const [mode, setMode] = useState('mail');
   const [query, setQuery] = useState('专线延伸');
-  const [mails, setMails] = useState({ loading: true, list: [], error: '' });
+  const [mails, setMails] = useState({ loading: true, list: [], hidden: { imported: 0, skipped: 0 }, error: '' });
+  const [showHandled, setShowHandled] = useState(false);
   const [pasted, setPasted] = useState('');
   const [result, setResult] = useState(null);
   const [form, setForm] = useState(emptyDraft);
+  const [confirmRepeat, setConfirmRepeat] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
-  function load(q = query) {
+  function load(q = query, all = showHandled) {
     setMails((current) => ({ ...current, loading: true, error: '' }));
-    requestJson(`/extensions/mail?${new URLSearchParams({ q })}`)
-      .then((data) => setMails({ loading: false, list: data.messages, error: '' }))
-      .catch((failure) => setMails({ loading: false, list: [], error: failure.message }));
+    requestJson(`/extensions/mail?${new URLSearchParams({ q, ...(all ? { all: '1' } : {}) })}`)
+      .then((data) => setMails({ loading: false, list: data.messages, hidden: data.hidden || { imported: 0, skipped: 0 }, error: '' }))
+      .catch((failure) => setMails({ loading: false, list: [], hidden: { imported: 0, skipped: 0 }, error: failure.message }));
   }
   useEffect(() => { load(); }, []);
 
   function take(data, source) {
     setResult({ ...data, source });
     setForm({ ...emptyDraft, ...asForm({ ...data.draft }) });
+    setConfirmRepeat(false);
     setError('');
+  }
+
+  // Setting a mail aside so it is no longer listed (the mailbox itself is left as it is), or undoing that.
+  async function skipMail(item, reason) {
+    setBusy(true);
+    setError('');
+    try {
+      if (reason) await requestJson(`/extensions/mail/${encodeURIComponent(item.id)}/skip`, jsonBody('POST', { reason, subject: item.subject }));
+      else await requestJson(`/extensions/mail/${encodeURIComponent(item.id)}/skip`, { method: 'DELETE' });
+      if (result) setResult(null);
+      load();
+    } catch (failure) {
+      setError(failure.message);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function readMail(id) {
@@ -155,13 +174,16 @@ function ImportDialog({ onClose, onSaved }) {
     setBusy(true);
     setError('');
     try {
-      await requestJson('/extensions', jsonBody('POST', { ...payload(form), source: result.source, mail: result.mail, text: result.text }));
+      await requestJson('/extensions', jsonBody('POST', { ...payload(form), source: result.source, mail: result.mail, text: result.text, confirmRepeat }));
       onSaved();
     } catch (failure) {
-      setError(failure.message);
+      // A repeat found only on saving (the figures were edited to match one) asks for the same confirmation.
+      if (failure.data?.repeat && !result.repeats?.length) setResult({ ...result, repeats: [failure.message] });
+      else setError(failure.message);
       setBusy(false);
     }
   }
+  const mustConfirm = Boolean(result?.repeats?.length) && !confirmRepeat;
 
   return (
     <div className="modal-mask" onKeyDown={(event) => { if (event.key === 'Escape' && !busy) onClose(); }}>
@@ -183,21 +205,50 @@ function ImportDialog({ onClose, onSaved }) {
                     <label className="kpi-list-search"><Search size={16} aria-hidden="true" /><input aria-label="搜索邮件" value={query} maxLength={40} onChange={(event) => setQuery(event.target.value)} /></label>
                     <button type="submit" disabled={mails.loading}>搜索</button>
                   </form>
-                  <p className="subtle ext-note">在系统邮箱的收件箱中按主题和正文搜索，只读取，不会改动或删除邮件。</p>
+                  <p className="subtle ext-note">在系统邮箱的收件箱中按主题和正文搜索，只读取，不会改动或删除邮件。已录入和标为不录入的邮件不再列出。</p>
                   <InlineError message={mails.error} onRetry={() => load()} />
                   {mails.loading && <p className="subtle" role="status">正在读取邮箱…</p>}
-                  {!mails.loading && !mails.error && !mails.list.length && <p className="subtle">收件箱中没有找到相关邮件。</p>}
+                  {!mails.loading && !mails.error && !mails.list.length && (
+                    <p className="subtle">{mails.hidden.imported + mails.hidden.skipped ? '没有待录入的邮件。' : '收件箱中没有找到相关邮件。'}</p>
+                  )}
                   <ul className="ext-mail-list">
-                    {mails.list.map((item) => (
-                      <li key={item.id}>
-                        <button type="button" disabled={busy} onClick={() => readMail(item.id)}>
-                          <strong>{item.subject || '（无主题）'}</strong>
-                          <small>{item.from}{item.at ? ` · ${beijingTime(item.at)}` : ''}{item.importedId ? ' · 已录入' : ''}</small>
-                          {item.snippet && <small className="ext-snippet">{item.snippet}</small>}
-                        </button>
-                      </li>
-                    ))}
+                    {mails.list.map((item) => {
+                      const handled = item.importedId || item.skipped;
+                      return (
+                        <li key={item.id} className={handled ? 'ext-mail-handled' : undefined}>
+                          <button type="button" disabled={busy} onClick={() => readMail(item.id)}>
+                            <strong>{item.subject || '（无主题）'}</strong>
+                            <small>
+                              {item.from}{item.at ? ` · ${beijingTime(item.at)}` : ''}
+                              {item.importedId ? ` · 已录入${item.importedName ? `（${item.importedName}）` : ''}` : ''}
+                              {!item.importedId && item.skipped ? ` · 已标为不录入（${item.skipped.reason}）` : ''}
+                            </small>
+                            {item.repeats?.map((note) => <small key={note} className="ext-repeat">{note}</small>)}
+                            {item.snippet && <small className="ext-snippet">{item.snippet}</small>}
+                          </button>
+                          {!item.importedId && (
+                            <button
+                              type="button"
+                              className="text-button ext-mail-skip"
+                              disabled={busy}
+                              onClick={() => skipMail(item, item.skipped ? null : item.repeats?.length ? '重复邮件' : '无需录入')}
+                            >
+                              {item.skipped ? '恢复' : item.repeats?.length ? '标为重复，不再显示' : '不录入，不再显示'}
+                            </button>
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
+                  {(mails.hidden.imported + mails.hidden.skipped > 0 || showHandled) && !mails.loading && (
+                    <button
+                      type="button"
+                      className="text-button ext-mail-toggle"
+                      onClick={() => { const next = !showHandled; setShowHandled(next); load(query, next); }}
+                    >
+                      {showHandled ? '只看待录入的邮件' : `显示已处理的邮件（已录入 ${mails.hidden.imported} 封、不录入 ${mails.hidden.skipped} 封）`}
+                    </button>
+                  )}
                 </>
               ) : (
                 <div className="kpi-edit-fields">
@@ -221,6 +272,19 @@ function ImportDialog({ onClose, onSaved }) {
                 </p>
               )}
               {result.importedId && <p className="operations-error">这封邮件已经录入过，不能重复录入。</p>}
+              {result.skipped && <p className="ext-warn">这封邮件已标为不录入（{result.skipped.reason}）。仍要录入的话可以继续。</p>}
+              {!result.importedId && result.repeats?.length > 0 && (
+                <div className="ext-repeats" role="alert">
+                  <strong>可能是重复的项目</strong>
+                  {result.repeats.map((note) => <p key={note}>{note}</p>)}
+                  <label className="ext-check">
+                    <input type="checkbox" checked={confirmRepeat} disabled={busy} onChange={(event) => setConfirmRepeat(event.target.checked)} /> 不是重复，仍然录入
+                  </label>
+                  {result.mail && !result.skipped && (
+                    <button type="button" className="text-button" disabled={busy} onClick={() => skipMail(result.mail, '重复邮件')}>是重复的，标为重复并返回</button>
+                  )}
+                </div>
+              )}
               {result.missing.length > 0 && <p className="ext-warn">没有识别到：{result.missing.join('、')}，请对照正文补上。</p>}
               {result.warnings.map((warning) => <p key={warning} className="ext-warn">{warning}</p>)}
               <details className="ext-source"><summary>查看邮件正文</summary><pre>{result.text}</pre></details>
@@ -228,7 +292,7 @@ function ImportDialog({ onClose, onSaved }) {
               <InlineError message={error} />
               <div className="kpi-form-actions">
                 <button type="button" disabled={busy} onClick={() => { setResult(null); setError(''); }}>返回</button>
-                <button type="submit" className="primary" disabled={busy || Boolean(result.importedId)}>{busy ? '正在保存…' : '确认录入'}</button>
+                <button type="submit" className="primary" disabled={busy || Boolean(result.importedId) || mustConfirm}>{busy ? '正在保存…' : '确认录入'}</button>
               </div>
             </form>
           )}

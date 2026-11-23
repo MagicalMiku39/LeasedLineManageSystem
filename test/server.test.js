@@ -2424,7 +2424,10 @@ test('专线延伸台账: read from the mailbox, checked, saved once per mail, f
   const row = await created.json();
   assert.deepEqual([row.group_name, row.manager_name, row.billing_amount, row.tiers.length, row.mail_attachments, row.missing], ['武汉百佳妇产医院有限公司', '周明', 2601, 2, ['结算材料.pdf'], ['产品编码', '产品账户', '下游单位']]);
   assert.equal((await save({ ...parsed.draft, source: 'mail', mail: parsed.mail })).status, 409, 'one mail, one record');
-  assert.equal((await (await request('/api/extensions/mail')).json()).messages[0].importedId, row.id);
+  // An entered mail is no longer listed, unless asked for.
+  const after = await (await request('/api/extensions/mail')).json();
+  assert.deepEqual([after.messages.map((item) => item.id), after.hidden], [['msg_ext2'], { imported: 1, skipped: 0 }]);
+  assert.equal((await (await request('/api/extensions/mail?all=1')).json()).messages[0].importedId, row.id);
 
   // Filling in the rest: the product code is the number, and it finds its line.
   const patch = (body) => request(`/api/extensions/${row.id}`, { method: 'PATCH', body });
@@ -2473,7 +2476,67 @@ test('专线延伸台账: read from the mailbox, checked, saved once per mail, f
   const scopes = (await (await request('/api/settings/backups')).json()).scopes.find((scope) => scope.key === 'ledger').tables;
   assert.equal(scopes.includes('专线延伸台账'), true);
 
-  db.exec("DELETE FROM line_extension; DELETE FROM line_extension_log; DELETE FROM leased_line WHERE group_product_code = '2705404918972'");
+  db.exec("DELETE FROM line_extension; DELETE FROM line_extension_log; DELETE FROM line_extension_mail; DELETE FROM leased_line WHERE group_product_code = '2705404918972'");
+});
+
+test('专线延伸台账: a mail forwarded twice is pointed out, set aside on request, and not entered twice without a yes', async (t) => {
+  const { agentMail } = await import('../server/lib/agent-mail.js');
+  const subject = '关于武汉百佳妇产医院专线延伸建档的请示';
+  const mails = {
+    msg_dup1: { subject: `转发：${subject}`, created_at: '2026-11-22T02:00:00Z' },
+    msg_dup2: { subject: `Fw: 转发：${subject}`, created_at: '2026-11-22T03:00:00Z' },
+    msg_other: { subject: '另一个项目', created_at: '2026-11-22T04:00:00Z' }
+  };
+  t.mock.method(agentMail, 'search', async () => Object.entries(mails).map(([message_id, item]) => ({ message_id, subject: item.subject, from: { email: 'x@example.com' }, created_at: item.created_at, snippet: '' })));
+  t.mock.method(agentMail, 'read', async (id) => ({ message_id: id, subject: mails[id].subject, from: { email: 'x@example.com' }, created_at: mails[id].created_at, body: extensionMail, body_format: 'PLAIN', attachments: [] }));
+  const list = async (query = '') => (await request(`/api/extensions/mail${query}`)).json();
+  const save = (body) => request('/api/extensions', { method: 'POST', body });
+
+  // Two copies with the same subject under different forward prefixes: both say so; the third does not.
+  let listed = await list();
+  const notes = Object.fromEntries(listed.messages.map((item) => [item.id, item.repeats]));
+  assert.deepEqual(notes, { msg_dup1: ['还有 1 封主题相同的邮件，可能是重复转发'], msg_dup2: ['还有 1 封主题相同的邮件，可能是重复转发'], msg_other: [] });
+
+  // Reading one copy, then the other: the second knows the first says the same.
+  const first = await (await request('/api/extensions/mail/msg_dup1/parse', { method: 'POST' })).json();
+  assert.deepEqual(first.repeats, []);
+  const second = await (await request('/api/extensions/mail/msg_dup2/parse', { method: 'POST' })).json();
+  assert.deepEqual(second.repeats, [`另一封邮件“转发：${subject}”的内容与这封相同，尚未录入`]);
+
+  // The first is entered; the second is now a repeat of a project in the ledger.
+  assert.equal((await save({ ...first.draft, source: 'mail', mail: first.mail, text: first.text })).status, 201);
+  listed = await list();
+  assert.deepEqual(listed.messages.map((item) => item.id), ['msg_dup2', 'msg_other']);
+  assert.equal(listed.messages[0].repeats.length, 2);
+  assert.match(listed.messages[0].repeats[0], /^与已录入的项目“武汉百佳妇产医院有限公司”（\d{4}-\d{2}-\d{2} 录入）的邮件主题相同/);
+  assert.match(listed.messages[0].repeats[1], /^内容与已录入的项目/);
+  const again = await (await request('/api/extensions/mail/msg_dup2/parse', { method: 'POST' })).json();
+  assert.match(again.repeats[0], /^已经录入过内容相同的项目“武汉百佳妇产医院有限公司”/);
+
+  // Saving it anyway is stopped until the person says it is not a repeat; pasted text the same.
+  const refused = await save({ ...again.draft, source: 'mail', mail: again.mail });
+  assert.equal(refused.status, 409);
+  assert.equal((await refused.json()).repeat, true);
+  const pasted = await (await request('/api/extensions/parse', { method: 'POST', body: { text: extensionMail } })).json();
+  assert.equal(pasted.repeats.length, 1);
+  assert.equal((await save({ ...pasted.draft, source: 'paste' })).status, 409);
+  const confirmed = await save({ ...pasted.draft, source: 'paste', confirmRepeat: true });
+  assert.equal(confirmed.status, 201);
+  db.prepare('DELETE FROM line_extension WHERE id = ?').run((await confirmed.json()).id);
+
+  // Set aside as a repeat: gone from the list, counted, shown on request, and can be brought back.
+  assert.equal((await request('/api/extensions/mail/bad id/skip', { method: 'POST', body: {} })).status, 400);
+  assert.equal((await request('/api/extensions/mail/msg_dup2/skip', { method: 'POST', body: { reason: '重复邮件' } })).status, 200);
+  listed = await list();
+  assert.deepEqual([listed.messages.map((item) => item.id), listed.hidden], [['msg_other'], { imported: 1, skipped: 1 }]);
+  const all = await list('?all=1');
+  assert.deepEqual(all.messages.find((item) => item.id === 'msg_dup2').skipped.reason, '重复邮件');
+  assert.equal((await request('/api/extensions/mail/msg_dup2/skip', { method: 'DELETE' })).status, 200);
+  assert.deepEqual((await list()).messages.map((item) => item.id), ['msg_dup2', 'msg_other']);
+  // The mailbox itself is only ever searched and read.
+  assert.equal(typeof agentMail.trash, 'undefined');
+
+  db.exec('DELETE FROM line_extension; DELETE FROM line_extension_log; DELETE FROM line_extension_mail');
 });
 
 test('logout invalidates the session cookie', async () => {

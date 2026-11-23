@@ -68,10 +68,60 @@ export function createExtensionRouter({ db, currentUser, mail = agentMail }) {
     changed_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_line_extension_log ON line_extension_log(extension_id, id);
+  -- What the system knows about a mail in the mailbox: what it said when it was last read out,
+  -- and whether it was set aside (a repeat, or nothing to enter). The mailbox itself is never changed.
+  CREATE TABLE IF NOT EXISTS line_extension_mail (
+    message_id TEXT PRIMARY KEY,
+    subject TEXT,
+    content_key TEXT,
+    parsed_at TEXT,
+    skipped_reason TEXT,
+    skipped_by TEXT,
+    skipped_at TEXT
+  );
   `);
 
   const username = (req) => currentUser(req)?.username || '';
   const text = (value) => String(value ?? '').trim();
+
+  // ---- telling repeats apart ----
+
+  // A subject without the forward/reply prefixes a mail picks up when it is passed on again.
+  function subjectKey(subject) {
+    let value = text(subject);
+    let before;
+    do {
+      before = value;
+      value = value.replace(/^\s*(?:(?:fwd?|re|转发|回复|答复)\s*[:：]|[[【(（]\s*(?:fwd?|转发)\s*[\]】)）])\s*/i, '');
+    } while (value !== before);
+    return value.replace(/\s+/g, '');
+  }
+
+  // The figures that make a project: group code, amounts and the price × times of each tier.
+  // Two filings with the same key are almost surely the same project sent twice.
+  function contentKey(record) {
+    const code = text(record.group_code);
+    const amount = (value) => (value === null || value === undefined || value === '' || !Number.isFinite(Number(value)) ? '' : String(Math.round(Number(value) * 100) / 100));
+    const amounts = [record.contract_amount, record.billing_amount, record.presale_amount].map(amount);
+    const tiers = (record.tiers || []).map((tier) => `${amount(tier.price)}x${Number(tier.times) || 0}`).sort().join(',');
+    if (!code || (amounts.every((value) => !value) && !tiers)) return null;
+    return [code, ...amounts, tiers].join('|');
+  }
+
+  // Projects already in the ledger, by content key and by the subject of the mail they came from.
+  function ledgerKeys() {
+    const byContent = new Map();
+    const bySubject = new Map();
+    for (const row of db.prepare('SELECT id, group_code, group_name, contract_amount, billing_amount, presale_amount, tiers_json, mail_message_id, mail_subject, created_at FROM line_extension').all()) {
+      const record = { ...row, tiers: JSON.parse(row.tiers_json || '[]') };
+      const key = contentKey(record);
+      if (key) byContent.set(key, [...(byContent.get(key) || []), record]);
+      const subject = subjectKey(row.mail_subject);
+      if (subject) bySubject.set(subject, [...(bySubject.get(subject) || []), record]);
+    }
+    return { byContent, bySubject };
+  }
+  const projectName = (record) => `“${record.group_name || record.group_code || '未命名项目'}”（${String(record.created_at || '').slice(0, 10)} 录入）`;
 
   // What the ledger and the full group list say about a group, to check the mail against.
   function knownGroup(code) {
@@ -161,28 +211,85 @@ export function createExtensionRouter({ db, currentUser, mail = agentMail }) {
 
   // ---- reading filing emails ----
 
+  // Mails already entered or set aside are left out unless ?all=1; the rest say when they look
+  // like a repeat of another mail or of a project already in the ledger.
   router.get('/mail', async (req, res) => {
     const q = text(req.query.q) || defaultQuery;
     if (q.length > 40) return res.status(400).json({ error: '搜索词不能超过 40 字' });
+    const showAll = req.query.all === '1';
     let messages;
     try {
       messages = await mail.search({ q, limit: 30 });
     } catch (error) {
       return res.status(502).json({ error: `读取邮箱失败：${error.message}` });
     }
-    const imported = new Map(db.prepare('SELECT mail_message_id, id FROM line_extension WHERE mail_message_id IS NOT NULL').all().map((row) => [row.mail_message_id, row.id]));
-    res.json({
-      q,
-      messages: messages.map((item) => ({
+    const imported = new Map(db.prepare('SELECT mail_message_id, id, group_name FROM line_extension WHERE mail_message_id IS NOT NULL').all().map((row) => [row.mail_message_id, row]));
+    const known = new Map(db.prepare('SELECT * FROM line_extension_mail').all().map((row) => [row.message_id, row]));
+    const { byContent, bySubject } = ledgerKeys();
+    const mailsByContent = new Map();
+    for (const row of known.values()) {
+      if (row.content_key && !imported.has(row.message_id)) mailsByContent.set(row.content_key, [...(mailsByContent.get(row.content_key) || []), row.message_id]);
+    }
+    const subjectCount = new Map();
+    for (const item of messages) {
+      if (imported.has(item.message_id) || known.get(item.message_id)?.skipped_at) continue;
+      const key = subjectKey(item.subject);
+      if (key) subjectCount.set(key, (subjectCount.get(key) || 0) + 1);
+    }
+
+    const list = messages.map((item) => {
+      const entered = imported.get(item.message_id);
+      const record = known.get(item.message_id);
+      const repeats = [];
+      if (!entered) {
+        const subject = subjectKey(item.subject);
+        const sameSubject = (bySubject.get(subject) || []).filter((row) => row.mail_message_id !== item.message_id);
+        if (sameSubject.length) repeats.push(`与已录入的项目${projectName(sameSubject[0])}的邮件主题相同，可能是重复转发`);
+        else if (subject && subjectCount.get(subject) > 1) repeats.push(`还有 ${subjectCount.get(subject) - 1} 封主题相同的邮件，可能是重复转发`);
+        const sameContent = record?.content_key ? byContent.get(record.content_key) || [] : [];
+        if (sameContent.length) repeats.push(`内容与已录入的项目${projectName(sameContent[0])}相同`);
+        else if (record?.content_key && (mailsByContent.get(record.content_key) || []).some((id) => id !== item.message_id)) repeats.push('内容与另一封未录入的邮件相同');
+      }
+      return {
         id: item.message_id,
         subject: item.subject || '',
         from: item.from?.name || item.from?.email || '',
         fromEmail: item.from?.email || '',
         at: item.created_at || null,
         snippet: mailText(item.snippet || '', 'html').slice(0, 160),
-        importedId: imported.get(item.message_id) ?? null
-      }))
+        importedId: entered?.id ?? null,
+        importedName: entered?.group_name || null,
+        skipped: record?.skipped_at ? { reason: record.skipped_reason, by: record.skipped_by, at: record.skipped_at } : null,
+        repeats
+      };
     });
+    const handled = (item) => item.importedId || item.skipped;
+    res.json({
+      q,
+      messages: showAll ? list : list.filter((item) => !handled(item)),
+      hidden: { imported: list.filter((item) => item.importedId).length, skipped: list.filter((item) => !item.importedId && item.skipped).length }
+    });
+  });
+
+  // Setting a mail aside (a repeat, or nothing to enter) so it is no longer listed; and undoing that.
+  router.post('/mail/:id/skip', (req, res) => {
+    const id = String(req.params.id);
+    if (!/^msg_[A-Za-z0-9_-]+$/.test(id)) return res.status(400).json({ error: '邮件编号不正确' });
+    const reason = text(req.body?.reason) || '无需录入';
+    if (reason.length > 60) return res.status(400).json({ error: '原因不能超过 60 字' });
+    const subject = text(req.body?.subject).slice(0, maxText) || null;
+    db.prepare(`INSERT INTO line_extension_mail (message_id, subject, skipped_reason, skipped_by, skipped_at) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(message_id) DO UPDATE SET subject = COALESCE(line_extension_mail.subject, excluded.subject),
+        skipped_reason = excluded.skipped_reason, skipped_by = excluded.skipped_by, skipped_at = excluded.skipped_at`)
+      .run(id, subject, reason, username(req), new Date().toISOString());
+    res.json({ id, reason });
+  });
+
+  router.delete('/mail/:id/skip', (req, res) => {
+    const id = String(req.params.id);
+    if (!/^msg_[A-Za-z0-9_-]+$/.test(id)) return res.status(400).json({ error: '邮件编号不正确' });
+    db.prepare('UPDATE line_extension_mail SET skipped_reason = NULL, skipped_by = NULL, skipped_at = NULL WHERE message_id = ?').run(id);
+    res.json({ id });
   });
 
   // One mail read and read out into a draft; nothing is saved.
@@ -198,9 +305,16 @@ export function createExtensionRouter({ db, currentUser, mail = agentMail }) {
     }
     const body = mailText(message?.body || '', message?.body_format || '');
     const parsed = parseExtensionMail(body);
+    const key = contentKey(parsed.draft);
+    const skipped = db.prepare('SELECT skipped_reason, skipped_at FROM line_extension_mail WHERE message_id = ?').get(id);
+    // Remember what this mail said, so a second copy of it can be recognised.
+    db.prepare(`INSERT INTO line_extension_mail (message_id, subject, content_key, parsed_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(message_id) DO UPDATE SET subject = excluded.subject, content_key = excluded.content_key, parsed_at = excluded.parsed_at`)
+      .run(id, text(message?.subject).slice(0, maxText) || null, key, new Date().toISOString());
     res.json({
-      ...result(parsed),
+      ...result(parsed, { messageId: id, subject: message?.subject }),
       importedId: existing?.id ?? null,
+      skipped: skipped?.skipped_at ? { reason: skipped.skipped_reason, at: skipped.skipped_at } : null,
       mail: {
         id,
         subject: message?.subject || '',
@@ -220,7 +334,25 @@ export function createExtensionRouter({ db, currentUser, mail = agentMail }) {
     res.json(result(parseExtensionMail(body)));
   });
 
-  function result(parsed) {
+  // Signs that this filing was entered already, or reached the mailbox more than once.
+  function repeatsOf(draft, { messageId = null, subject = '' } = {}) {
+    const notes = [];
+    const { byContent, bySubject } = ledgerKeys();
+    const key = contentKey(draft);
+    const sameContent = key ? (byContent.get(key) || []).filter((row) => row.mail_message_id !== messageId) : [];
+    if (sameContent.length) notes.push(`已经录入过内容相同的项目${projectName(sameContent[0])}，集团编码、金额和档次都一样`);
+    const sameSubject = messageId ? (bySubject.get(subjectKey(subject)) || []).filter((row) => row.mail_message_id !== messageId && !sameContent.includes(row)) : [];
+    if (sameSubject.length) notes.push(`已录入的项目${projectName(sameSubject[0])}来自一封主题相同的邮件`);
+    if (messageId && key) {
+      const imported = new Set(db.prepare('SELECT mail_message_id FROM line_extension WHERE mail_message_id IS NOT NULL').all().map((row) => row.mail_message_id));
+      const others = db.prepare('SELECT message_id, subject FROM line_extension_mail WHERE content_key = ? AND message_id <> ?').all(key, messageId)
+        .filter((row) => !imported.has(row.message_id));
+      if (others.length) notes.push(`另一封邮件“${others[0].subject || '（无主题）'}”的内容与这封相同，尚未录入`);
+    }
+    return notes;
+  }
+
+  function result(parsed, mailInfo) {
     const known = knownGroup(parsed.draft.group_code);
     const notes = [...parsed.warnings];
     if (parsed.draft.group_code && !known) notes.push('台账和全量集团清单中都没有这个集团编码，请核对');
@@ -230,7 +362,10 @@ export function createExtensionRouter({ db, currentUser, mail = agentMail }) {
     if (known?.group_name && parsed.draft.group_name && known.group_name !== parsed.draft.group_name) {
       notes.push(`邮件写的集团名称与${known.from === 'ledger' ? '台账' : '全量集团清单'}不同：${known.group_name}`);
     }
-    return { draft: parsed.draft, missing: parsed.missing, warnings: notes, tierTotal: parsed.tierTotal, text: parsed.text.slice(0, maxBody) };
+    return {
+      draft: parsed.draft, missing: parsed.missing, warnings: notes, repeats: repeatsOf(parsed.draft, mailInfo),
+      tierTotal: parsed.tierTotal, text: parsed.text.slice(0, maxBody)
+    };
   }
 
   // ---- the ledger ----
@@ -261,6 +396,13 @@ export function createExtensionRouter({ db, currentUser, mail = agentMail }) {
     if (source === 'mail' && !/^msg_[A-Za-z0-9_-]+$/.test(messageId)) return res.status(400).json({ error: '邮件编号不正确' });
     if (messageId && db.prepare('SELECT 1 FROM line_extension WHERE mail_message_id = ?').get(messageId)) {
       return res.status(409).json({ error: '这封邮件已经录入过了' });
+    }
+    // The same project entered twice (a mail forwarded again, or pasted after it was entered)
+    // is stopped until the person says it is not a repeat.
+    const key = contentKey({ ...checked.values, tiers: JSON.parse(checked.values.tiers_json || '[]') });
+    const same = key && !body.confirmRepeat ? ledgerKeys().byContent.get(key) : null;
+    if (same?.length) {
+      return res.status(409).json({ error: `已经录入过内容相同的项目${projectName(same[0])}。如果确认不是重复，请勾选“不是重复，仍然录入”后再保存`, repeat: true });
     }
     const at = new Date().toISOString();
     const values = {

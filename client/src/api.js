@@ -1,10 +1,11 @@
 export const apiBase = '/api';
 
 export class ApiError extends Error {
-  constructor(message, status) {
+  constructor(message, status, data = null) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.data = data;
   }
 }
 
@@ -39,7 +40,7 @@ export async function requestJson(path, options = {}) {
     }
   }
 
-  if (!response.ok) throw new ApiError(failureMessage(response, data), response.status);
+  if (!response.ok) throw new ApiError(failureMessage(response, data), response.status, data);
   return data;
 }
 
